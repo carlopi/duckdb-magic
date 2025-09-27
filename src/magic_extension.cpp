@@ -104,9 +104,9 @@ inline void MagicScalarFun(DataChunk &args, ExpressionState &state,
   UnaryExecutor::ExecuteWithNulls<string_t, string_t>(
       name_vector, result, args.size(),
       [&](string_t name, ValidityMask &mask, idx_t idx) {
-//if (mask.IsValid(idx) == false) {
-//	return string_t();
-//}
+	if (mask.RowIsValid(idx) == false) {
+		return string_t();
+	}
         auto &localState = ExecuteFunctionState::GetFunctionState(state)
                                ->Cast<MagicFunctionLocalState<MIME>>();
 
