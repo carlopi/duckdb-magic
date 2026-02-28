@@ -29,6 +29,11 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            , "spatial_case" as (FROM st_read(file_name))
            , "vortex_case" as (FROM read_vortex(file_name))
            , "excel_case" as (FROM read_xlsx(file_name))
+       -- TODO (post v1.5.0): add support for community extensions only available on stable releases:
+       --   - Arrow IPC (.arrow)  via nanoarrow:  magic returns 'data', detect by file extension
+       --   - XML                 via webbed:      magic returns 'text/xml', detect via magic_mime
+       --   - HDF5 (.h5/.hdf5)   via h5db:        magic returns 'application/x-hdf5', detect via magic_mime
+       --   - ODS                 via rusty_sheet: magic returns 'OpenDocument Spreadsheet', detect via magic_type
        FROM query_table(
              CASE
                WHEN format=='blob' THEN 'blob_case'
