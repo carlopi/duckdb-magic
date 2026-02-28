@@ -1,0 +1,34 @@
+# name: test/sql/read_any_remote_spatial.test
+# description: test read_any with publicly available remote spatial files
+# group: [magic]
+
+require magic
+
+statement ok
+INSTALL httpfs
+
+statement ok
+LOAD httpfs
+
+statement ok
+INSTALL spatial
+
+statement ok
+LOAD spatial
+
+# st_read requires this setting to avoid crashing when given an HTTP URL
+# (otherwise it crashes during the glob check with a mutex error)
+statement ok
+SET allow_asterisks_in_http_paths = true
+
+# .geojson extension: auto-detected as spatial by file name pattern
+query I
+SELECT COUNT(*) FROM read_any('https://gist.githubusercontent.com/zross/6a31f4ef9e778d94c204/raw/0fc66e1d8a6fe00e0a37790fe62e8c3c8a76fd8b/points.geojson');
+----
+18
+
+# larger geojson from duckdb_spatial test data (world administrative boundaries)
+query I
+SELECT COUNT(*) FROM read_any('https://raw.githubusercontent.com/duckdb/duckdb_spatial/main/test/data/world-administrative-boundaries.geojson');
+----
+256
