@@ -1,0 +1,33 @@
+# name: test/sql/read_any_remote_spatial_shp.test
+# description: test read_any with publicly available remote shapefiles
+# group: [magic]
+
+require magic
+
+statement ok
+INSTALL httpfs
+
+statement ok
+LOAD httpfs
+
+statement ok
+INSTALL spatial
+
+statement ok
+LOAD spatial
+
+# st_read requires this setting to avoid crashing when given an HTTP URL
+statement ok
+SET allow_asterisks_in_http_paths = true
+
+# magic detection on a remote shapefile
+query I
+SELECT magic_type('https://raw.githubusercontent.com/OSGeo/gdal/master/autotest/ogr/data/poly.shp');
+----
+ESRI Shapefile version 1000 length 2290 type Polygon
+
+# .shp extension: auto-detected as spatial by file name pattern
+query I
+SELECT COUNT(*) FROM read_any('https://raw.githubusercontent.com/OSGeo/gdal/master/autotest/ogr/data/poly.shp');
+----
+10
