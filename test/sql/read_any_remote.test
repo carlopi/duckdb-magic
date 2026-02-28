@@ -1,0 +1,81 @@
+# name: test/sql/read_any_remote.test
+# description: test read_any with publicly available remote files
+# group: [magic]
+
+require magic
+
+statement ok
+INSTALL httpfs
+
+statement ok
+LOAD httpfs
+
+statement ok
+INSTALL json
+
+statement ok
+LOAD json
+
+statement ok
+INSTALL parquet
+
+statement ok
+LOAD parquet
+
+# --- Parquet ---
+
+# magic detection on a remote parquet file
+query I
+SELECT magic_type('https://raw.githubusercontent.com/duckdb/duckdb/main/data/parquet-testing/userdata1.parquet');
+----
+Apache Parquet
+
+# read_any auto-detects parquet and reads 1000 rows
+query I
+SELECT COUNT(*) FROM read_any('https://raw.githubusercontent.com/duckdb/duckdb/main/data/parquet-testing/userdata1.parquet');
+----
+1000
+
+# second parquet file from a different public repo
+query I
+SELECT magic_type('https://raw.githubusercontent.com/tobilg/aws-iam-data/main/data/parquet/aws_services.parquet');
+----
+Apache Parquet
+
+query I
+SELECT COUNT(*) FROM read_any('https://raw.githubusercontent.com/tobilg/aws-iam-data/main/data/parquet/aws_services.parquet');
+----
+463
+
+# --- CSV ---
+
+# libmagic returns text/csv for this file, so auto-detection doesn't match the
+# text/plain check in read_any; explicit format:='csv' is required
+query I
+SELECT magic_mime('https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv');
+----
+text/csv
+
+query I
+SELECT COUNT(*) FROM read_any('https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv', format:='csv');
+----
+891
+
+# --- JSON / NDJSON ---
+
+# ndjson: auto-detected via mime type (application/x-ndjson ILIKE '%json')
+query I
+SELECT magic_type('https://raw.githubusercontent.com/duckdb/duckdb/main/data/json/example_n.ndjson');
+----
+New Line Delimited JSON text data
+
+query I
+SELECT COUNT(*) FROM read_any('https://raw.githubusercontent.com/duckdb/duckdb/main/data/json/example_n.ndjson');
+----
+5
+
+# .json extension: auto-detected by file name pattern
+query I
+SELECT COUNT(*) FROM read_any('https://raw.githubusercontent.com/tobilg/aws-edge-locations/main/data/aws-edge-locations.json');
+----
+1
