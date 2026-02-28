@@ -27,6 +27,7 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            , "avro_case" as (FROM read_avro(file_name))
            , "blob_case" as (FROM read_blob(file_name))
            , "spatial_case" as (FROM st_read(file_name))
+           , "vortex_case" as (FROM read_vortex(file_name))
        FROM query_table(
              CASE
                WHEN format=='blob' THEN 'blob_case'
@@ -35,8 +36,9 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='csv' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/plain' OR magic_mime(file_name) ILIKE 'text/csv')) THEN 'csv_case'
                WHEN format=='parquet' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Parquet%') THEN 'parquet_case'
                WHEN format=='avro' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Avro%') THEN 'avro_case'
-               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, parquet, spatial and blob')
-             ELSE error('read_any explicitly provided format is not one of: csv | json | parquet | blob | spatial (or geo alias) | auto"')
+               WHEN format=='vortex' OR (format=='auto' AND file_name ILIKE '%.vortex') THEN 'vortex_case'
+               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, parquet, avro, vortex, spatial and blob')
+             ELSE error('read_any explicitly provided format is not one of: csv | json | parquet | avro | vortex | blob | spatial (or geo alias) | auto"')
              END
        )
 ----   );
