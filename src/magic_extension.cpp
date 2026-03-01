@@ -154,23 +154,69 @@ inline void MagicScalarFun(DataChunk &args, ExpressionState &state,
 static void LoadInternal(ExtensionLoader &loader) {
   loader.SetDescription("Detect file types via magic library");
 
-  auto magic_type_scalar_function =
-      ScalarFunction("magic_type", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                     MagicScalarFun<false>, nullptr, nullptr, nullptr,
-                     MagicFunctionLocalStateFun<false>);
-  loader.RegisterFunction(magic_type_scalar_function);
+  // Register magic_type
+  {
+    ScalarFunction fn("magic_type", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+                      MagicScalarFun<false>, nullptr, nullptr, nullptr,
+                      MagicFunctionLocalStateFun<false>);
+    CreateScalarFunctionInfo info(fn);
+    FunctionDescription desc;
+    desc.parameter_names = {"file_path"};
+    desc.parameter_types = {LogicalType::VARCHAR};
+    desc.description =
+        "Returns the file type description for the given file path using the "
+        "libmagic database (e.g. 'Apache Parquet', 'JSON data').";
+    desc.examples = {
+        "SELECT magic_type('myfile.parquet');",
+        "SELECT file, magic_type(file) AS type FROM glob('data/**/*');",
+    };
+    desc.categories = {"magic"};
+    info.descriptions.push_back(std::move(desc));
+    loader.RegisterFunction(std::move(info));
+  }
 
-  auto magic_mime_scalar_function =
-      ScalarFunction("magic_mime", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                     MagicScalarFun<true>, nullptr, nullptr, nullptr,
-                     MagicFunctionLocalStateFun<true>);
-  loader.RegisterFunction(magic_mime_scalar_function);
+  // Register magic_mime
+  {
+    ScalarFunction fn("magic_mime", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+                      MagicScalarFun<true>, nullptr, nullptr, nullptr,
+                      MagicFunctionLocalStateFun<true>);
+    CreateScalarFunctionInfo info(fn);
+    FunctionDescription desc;
+    desc.parameter_names = {"file_path"};
+    desc.parameter_types = {LogicalType::VARCHAR};
+    desc.description =
+        "Returns the MIME type for the given file path using the libmagic "
+        "database (e.g. 'application/json', 'text/plain').";
+    desc.examples = {
+        "SELECT magic_mime('myfile.json');",
+        "SELECT file, magic_mime(file) AS mime FROM glob('data/**/*');",
+    };
+    desc.categories = {"magic"};
+    info.descriptions.push_back(std::move(desc));
+    loader.RegisterFunction(std::move(info));
+  }
 
-  // Table Macros
+  // Register read_any table macro
   for (idx_t index = 0;
        dynamic_sql_examples_table_macros[index].name != nullptr; index++) {
     auto table_info = DefaultTableFunctionGenerator::CreateTableMacroInfo(
         dynamic_sql_examples_table_macros[index]);
+    FunctionDescription desc;
+    desc.parameter_names = {"file_name", "format"};
+    desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
+    desc.description =
+        "Auto-detects and reads a file in any supported format. "
+        "The optional 'format' parameter overrides auto-detection; "
+        "supported values are: auto (default), json, csv, parquet, avro, "
+        "vortex, excel, blob, spatial (or geo).";
+    desc.examples = {
+        "FROM read_any('myfile.parquet');",
+        "FROM read_any('data.csv');",
+        "FROM read_any('archive.json', format := 'json');",
+        "FROM read_any('shapefile.shp', format := 'spatial');",
+    };
+    desc.categories = {"magic"};
+    table_info->descriptions.push_back(std::move(desc));
     loader.RegisterFunction(*table_info);
   }
 }
