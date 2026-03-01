@@ -113,9 +113,9 @@ inline void MagicScalarFun(DataChunk &args, ExpressionState &state,
   UnaryExecutor::ExecuteWithNulls<string_t, string_t>(
       name_vector, result, args.size(),
       [&](string_t name, ValidityMask &mask, idx_t idx) {
-	if (mask.RowIsValid(idx) == false) {
-		return string_t();
-	}
+        if (mask.RowIsValid(idx) == false) {
+          return string_t();
+        }
         auto &localState = ExecuteFunctionState::GetFunctionState(state)
                                ->Cast<MagicFunctionLocalState<MIME>>();
 
@@ -156,9 +156,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 
   // Register magic_type
   {
-    ScalarFunction fn("magic_type", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                      MagicScalarFun<false>, nullptr, nullptr, nullptr,
-                      MagicFunctionLocalStateFun<false>);
+    ScalarFunction fn("magic_type", {LogicalType::VARCHAR},
+                      LogicalType::VARCHAR, MagicScalarFun<false>, nullptr,
+                      nullptr, nullptr, MagicFunctionLocalStateFun<false>);
     CreateScalarFunctionInfo info(fn);
     FunctionDescription desc;
     desc.parameter_names = {"file_path"};
@@ -177,9 +177,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 
   // Register magic_mime
   {
-    ScalarFunction fn("magic_mime", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                      MagicScalarFun<true>, nullptr, nullptr, nullptr,
-                      MagicFunctionLocalStateFun<true>);
+    ScalarFunction fn("magic_mime", {LogicalType::VARCHAR},
+                      LogicalType::VARCHAR, MagicScalarFun<true>, nullptr,
+                      nullptr, nullptr, MagicFunctionLocalStateFun<true>);
     CreateScalarFunctionInfo info(fn);
     FunctionDescription desc;
     desc.parameter_names = {"file_path"};
@@ -236,10 +236,7 @@ std::string MagicExtension::Version() const {
 
 extern "C" {
 
-DUCKDB_CPP_EXTENSION_ENTRY(magic, loader) {
-	duckdb::LoadInternal(loader);
-}
-
+DUCKDB_CPP_EXTENSION_ENTRY(magic, loader) { duckdb::LoadInternal(loader); }
 }
 
 #ifndef DUCKDB_EXTENSION_MAIN
