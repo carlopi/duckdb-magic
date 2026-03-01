@@ -201,22 +201,6 @@ static void LoadInternal(ExtensionLoader &loader) {
        dynamic_sql_examples_table_macros[index].name != nullptr; index++) {
     auto table_info = DefaultTableFunctionGenerator::CreateTableMacroInfo(
         dynamic_sql_examples_table_macros[index]);
-    FunctionDescription desc;
-    desc.parameter_names = {"file_name", "format"};
-    desc.parameter_types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
-    desc.description =
-        "Auto-detects and reads a file in any supported format. "
-        "The optional 'format' parameter overrides auto-detection; "
-        "supported values are: auto (default), json, csv, parquet, avro, "
-        "vortex, excel, blob, spatial (or geo).";
-    desc.examples = {
-        "FROM read_any('myfile.parquet');",
-        "FROM read_any('data.csv');",
-        "FROM read_any('archive.json', format := 'json');",
-        "FROM read_any('shapefile.shp', format := 'spatial');",
-    };
-    desc.categories = {"magic"};
-    table_info->descriptions.push_back(std::move(desc));
     loader.RegisterFunction(*table_info);
   }
 }

@@ -38,12 +38,3 @@ SELECT len(examples) FROM duckdb_functions() WHERE function_name = 'magic_mime';
 ----
 2
 
-query T
-SELECT description FROM duckdb_functions() WHERE function_name = 'read_any';
-----
-Auto-detects and reads a file in any supported format. The optional 'format' parameter overrides auto-detection; supported values are: auto (default), json, csv, parquet, avro, vortex, excel, blob, spatial (or geo).
-
-query I
-SELECT len(examples) FROM duckdb_functions() WHERE function_name = 'read_any';
-----
-4
