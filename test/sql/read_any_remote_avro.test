@@ -1,6 +1,6 @@
 # name: test/sql/read_any_remote_avro.test
 # description: test read_any with publicly available remote avro files
-# group: [magic]
+# group: [sql]
 
 require magic
 

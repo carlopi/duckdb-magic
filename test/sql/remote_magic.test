@@ -1,6 +1,6 @@
-# name: test/sql/basic_magic.test
+# name: test/sql/remote_magic.test
 # description: test magic extension - remote
-# group: [magic]
+# group: [sql]
 
 require magic
 

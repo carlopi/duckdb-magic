@@ -1,6 +1,6 @@
 # name: test/sql/read_any_excel.test
 # description: test read_any with Excel (xlsx) file format
-# group: [magic]
+# group: [sql]
 
 require magic
 

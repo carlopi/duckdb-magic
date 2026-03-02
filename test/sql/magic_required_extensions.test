@@ -1,6 +1,6 @@
 # name: test/sql/magic_required_extensions.test
 # description: test magic_required_extensions function
-# group: [magic]
+# group: [sql]
 
 require magic
 
