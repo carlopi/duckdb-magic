@@ -106,6 +106,161 @@ MagicFunctionLocalStateFun(ExpressionState &state,
   return std::move(res);
 }
 
+// Local state holding both MAGIC_NONE and MAGIC_MIME_TYPE cookies,
+// used by magic_required_extensions().
+struct MagicBothLocalState : public FunctionLocalState {
+  explicit MagicBothLocalState() : FunctionLocalState() {
+    magic_type_cookie = magic_open(MAGIC_NONE | MAGIC_ERROR);
+    magic_mime_cookie = magic_open(MAGIC_MIME_TYPE | MAGIC_ERROR);
+
+    if (!magic_type_cookie || !magic_mime_cookie) {
+      throw std::runtime_error("Unable to initialize magic library");
+    }
+
+#ifdef STATIC_MAGIC_FILE
+    void *buff[1] = {const_cast<unsigned char *>(&magic_mgc[0])};
+    size_t z[1] = {size_t(magic_mgc_size)};
+    if (magic_load_buffers(magic_type_cookie, buff, z, 1) != 0) {
+      string message(magic_error(magic_type_cookie));
+      throw std::runtime_error("Cannot load magic database " + message);
+    }
+    if (magic_load_buffers(magic_mime_cookie, buff, z, 1) != 0) {
+      string message(magic_error(magic_mime_cookie));
+      throw std::runtime_error("Cannot load magic database " + message);
+    }
+#else
+    if (magic_load(magic_type_cookie, nullptr) != 0) {
+      string message(magic_error(magic_type_cookie));
+      throw std::runtime_error("Cannot load magic database " + message);
+    }
+    if (magic_load(magic_mime_cookie, nullptr) != 0) {
+      string message(magic_error(magic_mime_cookie));
+      throw std::runtime_error("Cannot load magic database " + message);
+    }
+#endif
+  }
+
+  ~MagicBothLocalState() {
+    if (magic_type_cookie)
+      magic_close(magic_type_cookie);
+    if (magic_mime_cookie)
+      magic_close(magic_mime_cookie);
+  }
+
+  magic_t magic_type_cookie;
+  magic_t magic_mime_cookie;
+};
+
+static unique_ptr<FunctionLocalState>
+MagicBothLocalStateFun(ExpressionState &state,
+                       const BoundFunctionExpression &expr,
+                       FunctionData *bind_data) {
+  return make_uniq<MagicBothLocalState>();
+}
+
+// Map (type_str, mime_str, file_path) to the list of DuckDB extension names
+// that must be loaded before calling read_any() on the file.
+// Mirrors the format-detection logic in the read_any table macro.
+static vector<string> DetectRequiredExtensions(const string &type_str,
+                                               const string &mime_str,
+                                               const string &file_path) {
+  auto lower_path = StringUtil::Lower(file_path);
+  auto lower_mime = StringUtil::Lower(mime_str);
+  auto lower_type = StringUtil::Lower(type_str);
+
+  // Spatial (detected by extension — magic does not distinguish these formats)
+  if (StringUtil::EndsWith(lower_path, ".geojson") ||
+      StringUtil::EndsWith(lower_path, ".fgb") ||
+      StringUtil::EndsWith(lower_path, ".prj") ||
+      StringUtil::EndsWith(lower_path, ".shp")) {
+    return {"spatial"};
+  }
+
+  // Vortex (detected by extension)
+  if (StringUtil::EndsWith(lower_path, ".vortex")) {
+    return {"vortex"};
+  }
+
+  // JSON
+  if (StringUtil::Contains(lower_mime, "json") ||
+      StringUtil::EndsWith(lower_path, ".json")) {
+    return {"json"};
+  }
+
+  // CSV — built-in, no extension needed
+  if (StringUtil::Contains(lower_mime, "text/plain") ||
+      StringUtil::Contains(lower_mime, "text/csv")) {
+    return {};
+  }
+
+  // Parquet
+  if (StringUtil::StartsWith(lower_type, "apache parquet")) {
+    return {"parquet"};
+  }
+
+  // Avro
+  if (StringUtil::StartsWith(lower_type, "apache avro")) {
+    return {"avro"};
+  }
+
+  // Excel
+  if (StringUtil::StartsWith(lower_type, "microsoft excel")) {
+    return {"excel"};
+  }
+
+  // Blob / unknown — no extension needed
+  return {};
+}
+
+static void MagicRequiredExtensionsFun(DataChunk &args, ExpressionState &state,
+                                       Vector &result) {
+  auto &name_vector = args.data[0];
+  auto &local = ExecuteFunctionState::GetFunctionState(state)
+                    ->Cast<MagicBothLocalState>();
+  auto &fs = FileSystem::GetFileSystem(state.GetContext());
+
+  auto list_data = ListVector::GetData(result);
+  idx_t child_offset = 0;
+
+  for (idx_t i = 0; i < args.size(); i++) {
+    auto val = name_vector.GetValue(i);
+    if (val.IsNull()) {
+      FlatVector::SetNull(result, i, true);
+      list_data[i] = {child_offset, 0};
+      continue;
+    }
+
+    auto name = val.GetValue<string>();
+
+    // Read a buffer from the file for magic detection
+    char buffer[1024] = {};
+    size_t bytes_read = 0;
+    try {
+      auto handle = fs.OpenFile(name, FileFlags::FILE_FLAGS_READ);
+      bytes_read = fs.Read(*handle, buffer, sizeof(buffer) - 1);
+    } catch (...) {
+      list_data[i] = {child_offset, 0};
+      continue;
+    }
+
+    string type_str, mime_str;
+    const char *r;
+    r = magic_buffer(local.magic_type_cookie, buffer, bytes_read);
+    if (r)
+      type_str = r;
+    r = magic_buffer(local.magic_mime_cookie, buffer, bytes_read);
+    if (r)
+      mime_str = r;
+
+    auto exts = DetectRequiredExtensions(type_str, mime_str, name);
+    list_data[i] = {child_offset, exts.size()};
+    for (auto &ext : exts) {
+      ListVector::PushBack(result, Value(ext));
+      child_offset++;
+    }
+  }
+}
+
 template <bool MIME>
 inline void MagicScalarFun(DataChunk &args, ExpressionState &state,
                            Vector &result) {
@@ -190,6 +345,30 @@ static void LoadInternal(ExtensionLoader &loader) {
     desc.examples = {
         "SELECT magic_mime('myfile.json');",
         "SELECT file, magic_mime(file) AS mime FROM glob('data/**/*');",
+    };
+    desc.categories = {"magic"};
+    info.descriptions.push_back(std::move(desc));
+    loader.RegisterFunction(std::move(info));
+  }
+
+  // Register magic_required_extensions
+  {
+    ScalarFunction fn("magic_required_extensions", {LogicalType::VARCHAR},
+                      LogicalType::LIST(LogicalType::VARCHAR),
+                      MagicRequiredExtensionsFun, nullptr, nullptr, nullptr,
+                      MagicBothLocalStateFun);
+    CreateScalarFunctionInfo info(fn);
+    FunctionDescription desc;
+    desc.parameter_names = {"file_path"};
+    desc.parameter_types = {LogicalType::VARCHAR};
+    desc.description =
+        "Returns the list of DuckDB extensions that must be loaded before "
+        "reading the given file with read_any(). Returns an empty list for "
+        "built-in formats (CSV, blob).";
+    desc.examples = {
+        "SELECT magic_required_extensions('myfile.json');",
+        "SELECT file, magic_required_extensions(file) AS exts FROM "
+        "glob('data/**/*');",
     };
     desc.categories = {"magic"};
     info.descriptions.push_back(std::move(desc));
