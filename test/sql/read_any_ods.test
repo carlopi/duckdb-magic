@@ -1,0 +1,35 @@
+# name: test/sql/read_any_ods.test
+# description: test read_any with ODS (OpenDocument Spreadsheet) files via rusty_sheet
+# group: [sql]
+
+require magic
+
+statement ok
+INSTALL rusty_sheet FROM community
+
+statement ok
+LOAD rusty_sheet
+
+# ODS uniquely identified via magic_type 'OpenDocument Spreadsheet'
+query I
+SELECT magic_type('${DATA_DIR}/test-files/test.ods');
+----
+OpenDocument Spreadsheet
+
+# auto-detected via magic_type
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.ods');
+----
+3
+
+# explicit format:='ods'
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.ods', format:='ods');
+----
+3
+
+# magic_required_extensions detects rusty_sheet
+query I
+SELECT magic_required_extensions('${DATA_DIR}/test-files/test.ods');
+----
+[rusty_sheet]

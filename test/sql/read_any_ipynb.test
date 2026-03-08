@@ -1,0 +1,48 @@
+# name: test/sql/read_any_ipynb.test
+# description: test read_any with Jupyter notebook (.ipynb) files
+# group: [sql]
+
+require magic
+
+statement ok
+INSTALL json
+
+statement ok
+LOAD json
+
+# Jupyter notebooks are JSON but have a well-known schema.
+# read_any extracts cells into a flat table with source, outputs and metadata.
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.ipynb');
+----
+4
+
+query ITITT
+SELECT cell_idx, cell_type, execution_count, cell_type='code' AND execution_count IS NOT NULL AS was_run, source IS NOT NULL AS has_source
+FROM read_any('${DATA_DIR}/test-files/test.ipynb')
+ORDER BY cell_idx;
+----
+1	markdown	NULL	false	true
+2	code	1	true	true
+3	code	2	true	true
+4	code	NULL	false	true
+
+query IT
+SELECT cell_idx, result
+FROM read_any('${DATA_DIR}/test-files/test.ipynb')
+WHERE result IS NOT NULL
+ORDER BY cell_idx;
+----
+3	84
+
+# explicit format aliases
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.ipynb', format:='ipynb');
+----
+4
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.ipynb', format:='notebook');
+----
+4

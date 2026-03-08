@@ -30,6 +30,73 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            , "vortex_case" as (FROM read_vortex(file_name))
            , "excel_case" as (FROM read_xlsx(file_name))
            , "yaml_case" as (FROM read_yaml(file_name))
+           , "ics_case" as (
+               WITH raw AS (
+                   SELECT row_number() OVER () AS rn, column0 AS line
+                   FROM read_csv(file_name, header=false, sep=e'\x01', columns={'column0': 'VARCHAR'})
+               ),
+               events AS (
+                   SELECT rn, line,
+                       count(*) FILTER (WHERE line='BEGIN:VEVENT') OVER (ORDER BY rn) AS event_idx
+                   FROM raw
+               ),
+               inside AS (
+                   SELECT line, event_idx FROM events
+                   WHERE event_idx > 0
+                     AND line NOT IN ('BEGIN:VEVENT', 'END:VEVENT', 'BEGIN:VCALENDAR', 'END:VCALENDAR')
+                     AND line NOT LIKE 'VERSION:%' AND line NOT LIKE 'PRODID:%' AND line NOT LIKE 'DTSTAMP:%'
+               ),
+               kv AS (
+                   SELECT event_idx,
+                       regexp_extract(line, '^([^;:]+)[;:]', 1)  AS key,
+                       substr(line, position(':' IN line) + 1)    AS value
+                   FROM inside
+               ),
+               pivoted AS (
+                   SELECT
+                       max(value) FILTER (WHERE key='UID')      AS uid,
+                       max(value) FILTER (WHERE key='SUMMARY')  AS summary,
+                       max(value) FILTER (WHERE key='LOCATION') AS location,
+                       max(value) FILTER (WHERE key='DTSTART')  AS dtstart_raw,
+                       max(value) FILTER (WHERE key='DTEND')    AS dtend_raw,
+                       regexp_replace(max(value) FILTER (WHERE key='ORGANIZER'), '^mailto:', '') AS organizer,
+                       list(regexp_replace(value, '^mailto:', '')) FILTER (WHERE key='ATTENDEE') AS attendees,
+                   FROM kv GROUP BY event_idx ORDER BY event_idx
+               )
+               SELECT uid, summary, location,
+                   coalesce(
+                       try_strptime(dtstart_raw, '%Y%m%dT%H%M%SZ'),
+                       try_strptime(dtstart_raw, '%Y%m%dT%H%M%S'),
+                       try_strptime(dtstart_raw, '%Y%m%d')
+                   ) AS dtstart,
+                   coalesce(
+                       try_strptime(dtend_raw, '%Y%m%dT%H%M%SZ'),
+                       try_strptime(dtend_raw, '%Y%m%dT%H%M%S'),
+                       try_strptime(dtend_raw, '%Y%m%d')
+                   ) AS dtend,
+                   organizer, attendees,
+               FROM pivoted
+           )
+           , "ipynb_case" as (
+               WITH nb AS (FROM read_json_auto(file_name))
+               SELECT
+                   cell_idx,
+                   cell.cell_type,
+                   array_to_string(cell.source, '') AS source,
+                   cell.execution_count,
+                   array_to_string(
+                       flatten(list(o.text) FILTER (WHERE o.output_type='stream')),
+                       '') AS stdout,
+                   array_to_string(
+                       flatten(list(struct_extract(o.data, 'text/plain')) FILTER (WHERE o.output_type='execute_result')),
+                       '') AS result,
+               FROM nb, UNNEST(cells) WITH ORDINALITY AS t(cell, cell_idx)
+               LEFT JOIN UNNEST(cell.outputs) AS t2(o) ON true
+               GROUP BY ALL
+               ORDER BY cell_idx
+           )
+           , "ods_case" as (FROM read_sheet(file_name))
+           , "xml_case" as (FROM read_xml(file_name))
            , "har_case" as (
                SELECT
                    entry.startedDateTime                   AS started_at,
@@ -51,8 +118,6 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            )
        -- TODO (post v1.5.0): add support for community extensions only available on stable releases:
        --   - Arrow IPC (.arrow)  via nanoarrow:  magic returns 'data', detect by file extension
-       --   - XML                 via webbed:      magic returns 'text/xml', detect via magic_mime
-       --   - ODS                 via rusty_sheet: magic returns 'OpenDocument Spreadsheet', detect via magic_type
        --   - HDF5 (.h5/.hdf5)   via h5db:        magic returns 'application/x-hdf5', detect via magic_mime
        --                         h5_read() requires a dataset path arg (not just a file path), so it can't fit
        --                         the read_any(file) pattern directly. Options: (a) use h5_tree() to show structure
@@ -65,16 +130,20 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                --       .osm is excluded (GDAL OSM driver requires a config file, crashes without it)
                --       .gpx is excluded (GDAL GPX driver crashes on read in current spatial version)
                WHEN format == 'spatial' OR format == 'gpkg' OR format LIKE 'geo%' OR (format=='auto' AND (file_name ILIKE '%.geojson' OR file_name ILIKE '%.geojsonl' OR file_name ILIKE '%.ndgeojson' OR file_name ILIKE '%.topojson' OR file_name ILIKE '%.fgb' OR file_name ILIKE '%.prj' OR file_name ILIKE '%.shp' OR file_name ILIKE '%.kml' OR magic_mime(file_name) ILIKE '%geopackage%')) THEN 'spatial_case'
+               WHEN format=='ipynb' OR format=='notebook' OR (format=='auto' AND file_name ILIKE '%.ipynb') THEN 'ipynb_case'
                WHEN format=='har' OR (format=='auto' AND file_name ILIKE '%.har') THEN 'har_case'
                WHEN format=='json' OR (format=='auto' AND (magic_mime(file_name) ILIKE '%json' OR file_name ILIKE '%.json' OR file_name ILIKE '%.jsonl' OR file_name ILIKE '%.ndjson')) THEN 'json_case'
                WHEN format=='yaml' OR format=='yml' OR (format=='auto' AND (file_name ILIKE '%.yaml' OR file_name ILIKE '%.yml')) THEN 'yaml_case'
+               WHEN format=='ics' OR format=='ical' OR format=='calendar' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/calendar' OR file_name ILIKE '%.ics' OR file_name ILIKE '%.ical')) THEN 'ics_case'
                WHEN format=='csv' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/plain' OR magic_mime(file_name) ILIKE 'text/csv')) THEN 'csv_case'
                WHEN format=='parquet' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Parquet%') THEN 'parquet_case'
                WHEN format=='avro' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Avro%') THEN 'avro_case'
                WHEN format=='vortex' OR (format=='auto' AND file_name ILIKE '%.vortex') THEN 'vortex_case'
                WHEN format=='excel' OR format=='xlsx' OR (format=='auto' AND magic_type(file_name) ILIKE 'Microsoft Excel%') THEN 'excel_case'
-               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, parquet, avro, vortex, excel, yaml, spatial and blob')
-             ELSE error('read_any explicitly provided format is not one of: csv | json | har | parquet | avro | vortex | excel | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
+               WHEN format=='ods' OR (format=='auto' AND (magic_type(file_name) ILIKE 'OpenDocument Spreadsheet%' OR magic_mime(file_name) ILIKE '%opendocument.spreadsheet%' OR file_name ILIKE '%.ods')) THEN 'ods_case'
+               WHEN format=='xml' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/xml' OR file_name ILIKE '%.xml')) THEN 'xml_case'
+               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, vortex, excel, ods, xml, yaml, spatial and blob')
+             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
              END
        )
 ----   );
@@ -228,9 +297,21 @@ static vector<string> DetectRequiredExtensions(const string &type_str,
     return {"yaml"};
   }
 
+  // Jupyter notebook — detected by extension before generic JSON catch
+  if (StringUtil::EndsWith(lower_path, ".ipynb")) {
+    return {"json"};
+  }
+
   // HAR (HTTP Archive) — detected by extension before generic JSON catch
   if (StringUtil::EndsWith(lower_path, ".har")) {
     return {"json"};
+  }
+
+  // ICS / iCalendar — detected by mime or extension
+  if (StringUtil::Contains(lower_mime, "text/calendar") ||
+      StringUtil::EndsWith(lower_path, ".ics") ||
+      StringUtil::EndsWith(lower_path, ".ical")) {
+    return {};
   }
 
   // JSON (including newline-delimited variants)
@@ -260,6 +341,19 @@ static vector<string> DetectRequiredExtensions(const string &type_str,
   // Excel
   if (StringUtil::StartsWith(lower_type, "microsoft excel")) {
     return {"excel"};
+  }
+
+  // ODS (OpenDocument Spreadsheet) — via rusty_sheet
+  if (StringUtil::StartsWith(lower_type, "opendocument spreadsheet") ||
+      StringUtil::Contains(lower_mime, "opendocument.spreadsheet") ||
+      StringUtil::EndsWith(lower_path, ".ods")) {
+    return {"rusty_sheet"};
+  }
+
+  // XML — via webbed (checked after spatial so KML/GML don't match)
+  if (StringUtil::Contains(lower_mime, "text/xml") ||
+      StringUtil::EndsWith(lower_path, ".xml")) {
+    return {"webbed"};
   }
 
   // Blob / unknown — no extension needed

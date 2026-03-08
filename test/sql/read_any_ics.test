@@ -1,0 +1,43 @@
+# name: test/sql/read_any_ics.test
+# description: test read_any with ICS (iCalendar) files
+# group: [sql]
+
+require magic
+
+# ICS files are uniquely identified by magic_mime 'text/calendar'.
+# read_any extracts VEVENT blocks into a flat table of calendar events.
+
+query I
+SELECT magic_mime('${DATA_DIR}/test-files/test.ics');
+----
+text/calendar
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.ics');
+----
+2
+
+query TTTTTT
+SELECT uid, summary, location, dtstart::VARCHAR, dtend::VARCHAR, organizer
+FROM read_any('${DATA_DIR}/test-files/test.ics')
+ORDER BY dtstart;
+----
+event1@example.com	Team standup	Zoom	2024-03-15 09:00:00	2024-03-15 10:00:00	alice@example.com
+event2@example.com	Quarterly review	Conference Room A	2024-03-20 14:00:00	2024-03-20 15:00:00	alice@example.com
+
+# attendees are collected as a list
+query T
+SELECT attendees::VARCHAR FROM read_any('${DATA_DIR}/test-files/test.ics') WHERE uid='event1@example.com';
+----
+[bob@example.com, carol@example.com]
+
+# explicit format aliases
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.ics', format:='ics');
+----
+2
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.ics', format:='calendar');
+----
+2

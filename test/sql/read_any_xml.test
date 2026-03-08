@@ -1,0 +1,35 @@
+# name: test/sql/read_any_xml.test
+# description: test read_any with XML files via webbed
+# group: [sql]
+
+require magic
+
+statement ok
+INSTALL webbed FROM community
+
+statement ok
+LOAD webbed
+
+# XML identified via magic_mime 'text/xml'
+query I
+SELECT magic_mime('${DATA_DIR}/test-files/test.xml');
+----
+text/xml
+
+# auto-detected via magic_mime
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.xml');
+----
+2
+
+# explicit format:='xml'
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.xml', format:='xml');
+----
+2
+
+# magic_required_extensions detects webbed
+query I
+SELECT magic_required_extensions('${DATA_DIR}/test-files/test.xml');
+----
+[webbed]
