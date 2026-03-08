@@ -1,0 +1,37 @@
+# name: test/sql/read_any_lance.test
+# description: test read_any with lance file format
+# group: [sql]
+
+require magic
+
+statement ok
+INSTALL lance FROM community
+
+statement ok
+LOAD lance
+
+# create a local lance file
+statement ok
+COPY (SELECT i, i*2 AS double_i FROM generate_series(1, 5) t(i)) TO '__TEST_DIR__/test.lance' (FORMAT LANCE)
+
+# .lance extension: auto-detected by file name pattern
+query I
+SELECT COUNT(*) FROM read_any('__TEST_DIR__/test.lance');
+----
+5
+
+# verify data roundtrips correctly
+query II
+SELECT i, double_i FROM read_any('__TEST_DIR__/test.lance') ORDER BY i;
+----
+1	2
+2	4
+3	6
+4	8
+5	10
+
+# explicit format parameter
+query I
+SELECT COUNT(*) FROM read_any('__TEST_DIR__/test.lance', format:='lance');
+----
+5
