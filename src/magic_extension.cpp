@@ -14,6 +14,7 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "duckdb/catalog/default/default_table_functions.hpp"
+#include "duckdb/main/extension_helper.hpp"
 
 namespace duckdb {
 
@@ -258,12 +259,44 @@ MagicBothLocalStateFun(ExpressionState &state,
   return make_uniq<MagicBothLocalState>();
 }
 
-// Map (type_str, mime_str, file_path) to the list of DuckDB extension names
-// that must be loaded before calling read_any() on the file.
-// Mirrors the format-detection logic in the read_any table macro.
-static vector<string> DetectRequiredExtensions(const string &type_str,
-                                               const string &mime_str,
-                                               const string &file_path) {
+// Try to install+load a community filesystem extension for the given path URI.
+// Checks allow_community_extensions before installing, and uses the community
+// repository explicitly. Best-effort: failures surface from the actual reader.
+static void TryEnsureCommunityFilesystem(ClientContext &context,
+                                         const string &ext_name) {
+  if (context.db->ExtensionIsLoaded(ext_name)) {
+    return;
+  }
+  try {
+    if (Settings::Get<AutoinstallKnownExtensionsSetting>(context) &&
+        Settings::Get<AllowCommunityExtensionsSetting>(context)) {
+      auto community_repo = ExtensionRepository::GetRepositoryByUrl(
+          ExtensionInstallInfo::COMMUNITY_REPOSITORY_URL);
+      ExtensionInstallOptions options;
+      options.repository = community_repo;
+      ExtensionHelper::InstallExtension(context, ext_name, options);
+    }
+    if (Settings::Get<AutoloadKnownExtensionsSetting>(context)) {
+      ExtensionHelper::LoadExternalExtension(context, ext_name);
+    }
+  } catch (...) {
+    // best-effort — errors will surface from the actual reader
+  }
+}
+
+// Dispatch to the appropriate filesystem loader based on the path URI scheme.
+static void TryEnsureFilesystem(ClientContext &context, const string &path) {
+  auto lower = StringUtil::Lower(path);
+  if (StringUtil::StartsWith(lower, "gh://")) {
+    TryEnsureCommunityFilesystem(context, "gh");
+  }
+}
+
+// Detect which DuckDB extensions are required for the file format only
+// (not the filesystem). Mirrors the format-detection logic in read_any.
+static vector<string> DetectFormatExtensions(const string &type_str,
+                                             const string &mime_str,
+                                             const string &file_path) {
   auto lower_path = StringUtil::Lower(file_path);
   auto lower_mime = StringUtil::Lower(mime_str);
   auto lower_type = StringUtil::Lower(type_str);
@@ -367,6 +400,25 @@ static vector<string> DetectRequiredExtensions(const string &type_str,
   return {};
 }
 
+// Full required-extensions list: filesystem extension (e.g. "gh") prepended
+// to the format extension(s). This is what magic_required_extensions() returns.
+static vector<string> DetectRequiredExtensions(const string &type_str,
+                                               const string &mime_str,
+                                               const string &file_path) {
+  auto lower_path = StringUtil::Lower(file_path);
+
+  vector<string> result;
+
+  // Filesystem extensions (by URI scheme)
+  if (StringUtil::StartsWith(lower_path, "gh://")) {
+    result.push_back("gh");
+  }
+
+  auto format_exts = DetectFormatExtensions(type_str, mime_str, file_path);
+  result.insert(result.end(), format_exts.begin(), format_exts.end());
+  return result;
+}
+
 static void MagicRequiredExtensionsFun(DataChunk &args, ExpressionState &state,
                                        Vector &result) {
   auto &name_vector = args.data[0];
@@ -386,6 +438,9 @@ static void MagicRequiredExtensionsFun(DataChunk &args, ExpressionState &state,
     }
 
     auto name = val.GetValue<string>();
+
+    // Ensure any filesystem extension (e.g. gh) is loaded before opening
+    TryEnsureFilesystem(state.GetContext(), name);
 
     // Read a buffer from the file for magic detection
     char buffer[1024] = {};
@@ -442,6 +497,7 @@ inline void MagicScalarFun(DataChunk &args, ExpressionState &state,
 
         if (onBuffer) {
           auto &fs = FileSystem::GetFileSystem(state.GetContext());
+          TryEnsureFilesystem(state.GetContext(), terminated);
           auto handle = fs.OpenFile(actual_file, FileFlags::FILE_FLAGS_READ);
           char buffer[1024] = {};
           auto bytes_read = fs.Read(*handle, buffer, sizeof(buffer) - 1);
