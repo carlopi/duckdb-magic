@@ -29,23 +29,52 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            , "spatial_case" as (FROM st_read(file_name))
            , "vortex_case" as (FROM read_vortex(file_name))
            , "excel_case" as (FROM read_xlsx(file_name))
+           , "yaml_case" as (FROM read_yaml(file_name))
+           , "har_case" as (
+               SELECT
+                   entry.startedDateTime                   AS started_at,
+                   entry.request.method                    AS method,
+                   entry.request.url                       AS url,
+                   entry.response.status                   AS status,
+                   entry.response.statusText               AS status_text,
+                   entry.time                              AS total_ms,
+                   entry.timings.send                      AS send_ms,
+                   entry.timings.wait                      AS wait_ms,
+                   entry.timings.receive                   AS receive_ms,
+                   entry.request.bodySize                  AS req_body_bytes,
+                   entry.response.content.size             AS resp_body_bytes,
+                   entry.response.content.mimeType         AS resp_mime,
+               FROM (
+                   SELECT UNNEST(log.entries) AS entry
+                   FROM read_json_auto(file_name)
+               )
+           )
        -- TODO (post v1.5.0): add support for community extensions only available on stable releases:
        --   - Arrow IPC (.arrow)  via nanoarrow:  magic returns 'data', detect by file extension
        --   - XML                 via webbed:      magic returns 'text/xml', detect via magic_mime
-       --   - HDF5 (.h5/.hdf5)   via h5db:        magic returns 'application/x-hdf5', detect via magic_mime
        --   - ODS                 via rusty_sheet: magic returns 'OpenDocument Spreadsheet', detect via magic_type
+       --   - HDF5 (.h5/.hdf5)   via h5db:        magic returns 'application/x-hdf5', detect via magic_mime
+       --                         h5_read() requires a dataset path arg (not just a file path), so it can't fit
+       --                         the read_any(file) pattern directly. Options: (a) use h5_tree() to show structure
+       --                         only, or (b) add an optional dataset parameter to read_any() so the user can
+       --                         pass read_any('file.h5', dataset:='/measurements').
        FROM query_table(
              CASE
                WHEN format=='blob' THEN 'blob_case'
-               WHEN format == 'spatial' OR format LIKE 'geo%' OR (format=='auto' AND (file_name ILIKE '%.geojson' OR file_name ILIKE '%.fgb' OR file_name ILIKE '%.prj' OR file_name ILIKE '%.shp')) THEN 'spatial_case'
-               WHEN format=='json' OR (format=='auto' AND magic_mime(file_name) ILIKE '%json') OR (file_name LIKE '%.json') THEN 'json_case'
+               -- NOTE: .gml is excluded (GDAL fetches remote XSD schema, hangs without network)
+               --       .osm is excluded (GDAL OSM driver requires a config file, crashes without it)
+               --       .gpx is excluded (GDAL GPX driver crashes on read in current spatial version)
+               WHEN format == 'spatial' OR format == 'gpkg' OR format LIKE 'geo%' OR (format=='auto' AND (file_name ILIKE '%.geojson' OR file_name ILIKE '%.geojsonl' OR file_name ILIKE '%.ndgeojson' OR file_name ILIKE '%.topojson' OR file_name ILIKE '%.fgb' OR file_name ILIKE '%.prj' OR file_name ILIKE '%.shp' OR file_name ILIKE '%.kml' OR magic_mime(file_name) ILIKE '%geopackage%')) THEN 'spatial_case'
+               WHEN format=='har' OR (format=='auto' AND file_name ILIKE '%.har') THEN 'har_case'
+               WHEN format=='json' OR (format=='auto' AND (magic_mime(file_name) ILIKE '%json' OR file_name ILIKE '%.json' OR file_name ILIKE '%.jsonl' OR file_name ILIKE '%.ndjson')) THEN 'json_case'
+               WHEN format=='yaml' OR format=='yml' OR (format=='auto' AND (file_name ILIKE '%.yaml' OR file_name ILIKE '%.yml')) THEN 'yaml_case'
                WHEN format=='csv' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/plain' OR magic_mime(file_name) ILIKE 'text/csv')) THEN 'csv_case'
                WHEN format=='parquet' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Parquet%') THEN 'parquet_case'
                WHEN format=='avro' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Avro%') THEN 'avro_case'
                WHEN format=='vortex' OR (format=='auto' AND file_name ILIKE '%.vortex') THEN 'vortex_case'
                WHEN format=='excel' OR format=='xlsx' OR (format=='auto' AND magic_type(file_name) ILIKE 'Microsoft Excel%') THEN 'excel_case'
-               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, parquet, avro, vortex, excel, spatial and blob')
-             ELSE error('read_any explicitly provided format is not one of: csv | json | parquet | avro | vortex | excel | blob | spatial (or geo alias) | auto"')
+               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, parquet, avro, vortex, excel, yaml, spatial and blob')
+             ELSE error('read_any explicitly provided format is not one of: csv | json | har | parquet | avro | vortex | excel | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
              END
        )
 ----   );
@@ -168,11 +197,23 @@ static vector<string> DetectRequiredExtensions(const string &type_str,
   auto lower_mime = StringUtil::Lower(mime_str);
   auto lower_type = StringUtil::Lower(type_str);
 
-  // Spatial (detected by extension — magic does not distinguish these formats)
+  // Spatial — GeoPackage uniquely detectable via mime
+  if (StringUtil::Contains(lower_mime, "geopackage")) {
+    return {"spatial"};
+  }
+
+  // Spatial — detected by extension (magic does not distinguish these formats)
+  // NOTE: .gml excluded — GDAL fetches remote XSD schema on open, hangs without network
+  // NOTE: .osm excluded — GDAL OSM driver requires a config file, crashes without it
+  // NOTE: .gpx excluded — GDAL GPX driver crashes on read in current spatial version
   if (StringUtil::EndsWith(lower_path, ".geojson") ||
+      StringUtil::EndsWith(lower_path, ".geojsonl") ||
+      StringUtil::EndsWith(lower_path, ".ndgeojson") ||
+      StringUtil::EndsWith(lower_path, ".topojson") ||
       StringUtil::EndsWith(lower_path, ".fgb") ||
       StringUtil::EndsWith(lower_path, ".prj") ||
-      StringUtil::EndsWith(lower_path, ".shp")) {
+      StringUtil::EndsWith(lower_path, ".shp") ||
+      StringUtil::EndsWith(lower_path, ".kml")) {
     return {"spatial"};
   }
 
@@ -181,9 +222,22 @@ static vector<string> DetectRequiredExtensions(const string &type_str,
     return {"vortex"};
   }
 
-  // JSON
+  // YAML (detected by extension — magic returns text/plain)
+  if (StringUtil::EndsWith(lower_path, ".yaml") ||
+      StringUtil::EndsWith(lower_path, ".yml")) {
+    return {"yaml"};
+  }
+
+  // HAR (HTTP Archive) — detected by extension before generic JSON catch
+  if (StringUtil::EndsWith(lower_path, ".har")) {
+    return {"json"};
+  }
+
+  // JSON (including newline-delimited variants)
   if (StringUtil::Contains(lower_mime, "json") ||
-      StringUtil::EndsWith(lower_path, ".json")) {
+      StringUtil::EndsWith(lower_path, ".json") ||
+      StringUtil::EndsWith(lower_path, ".jsonl") ||
+      StringUtil::EndsWith(lower_path, ".ndjson")) {
     return {"json"};
   }
 

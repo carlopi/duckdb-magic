@@ -1,0 +1,34 @@
+# name: test/sql/read_any_har.test
+# description: test read_any with HAR (HTTP Archive) files
+# group: [sql]
+
+require magic
+
+statement ok
+INSTALL json
+
+statement ok
+LOAD json
+
+# HAR files are JSON under the hood but have a well-known schema;
+# read_any extracts log.entries into a flat table of request/response rows.
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.har');
+----
+3
+
+query TTIIIIIT
+SELECT method, url, status, total_ms, wait_ms, req_body_bytes, resp_body_bytes, resp_mime
+FROM read_any('${DATA_DIR}/test-files/test.har')
+ORDER BY started_at;
+----
+GET	https://example.com/api/users	200	250	200	0	1024	application/json
+POST	https://example.com/api/login	401	80	75	256	64	application/json
+GET	https://cdn.example.com/style.css	304	15	14	0	0	text/css
+
+# explicit format:='har' also works
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.har', format:='har');
+----
+3

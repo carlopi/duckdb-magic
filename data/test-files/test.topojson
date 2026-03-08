@@ -1,0 +1,1 @@
+{"type":"Topology","objects":{"points":{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[0,0],"properties":{"name":"origin"}}]}},"arcs":[],"bbox":[-180,-90,180,90]}

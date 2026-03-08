@@ -1,0 +1,73 @@
+# name: test/sql/read_any_spatial.test
+# description: test read_any with spatial file formats
+# group: [sql]
+
+require magic
+
+statement ok
+INSTALL spatial
+
+statement ok
+LOAD spatial
+
+# --- GeoPackage (.gpkg) — auto-detected via magic_mime 'application/geopackage+sqlite3' ---
+
+query I
+SELECT magic_mime('${DATA_DIR}/test-files/test.gpkg') ILIKE '%geopackage%';
+----
+true
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.gpkg');
+----
+2
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.gpkg', format:='gpkg');
+----
+2
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.gpkg', format:='spatial');
+----
+2
+
+# --- GeoJSONL / newline-delimited GeoJSON (.geojsonl) — auto-detected by extension ---
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.geojsonl');
+----
+2
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.geojsonl', format:='geojsonl');
+----
+2
+
+# --- TopoJSON (.topojson) — auto-detected by extension ---
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.topojson');
+----
+1
+
+# --- KML (.kml) — auto-detected by extension ---
+
+query I
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.kml');
+----
+1
+
+# --- Real files from duckdb-spatial ---
+
+# FlatGeobuf (.fgb) — auto-detected via magic_type 'FlatGeobuf file'
+query I
+SELECT COUNT(*) FROM read_any('/Users/carlo/duckdblabs/duckdb-spatial/test/data/amsterdam_roads.fgb');
+----
+21648
+
+# Shapefile (.shp) — auto-detected by extension
+query I
+SELECT COUNT(*) FROM read_any('/Users/carlo/duckdblabs/duckdb-spatial/test/data/nyc_taxi/taxi_zones/taxi_zones.shp');
+----
+263
