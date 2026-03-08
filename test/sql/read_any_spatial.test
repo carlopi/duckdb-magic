@@ -58,16 +58,14 @@ SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.kml');
 ----
 1
 
-# --- Real files from duckdb-spatial ---
-
 # FlatGeobuf (.fgb) — auto-detected via magic_type 'FlatGeobuf file'
 query I
-SELECT COUNT(*) FROM read_any('/Users/carlo/duckdblabs/duckdb-spatial/test/data/amsterdam_roads.fgb');
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.fgb');
 ----
-21648
+3
 
 # Shapefile (.shp) — auto-detected by extension
 query I
-SELECT COUNT(*) FROM read_any('/Users/carlo/duckdblabs/duckdb-spatial/test/data/nyc_taxi/taxi_zones/taxi_zones.shp');
+SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.shp');
 ----
-263
+3

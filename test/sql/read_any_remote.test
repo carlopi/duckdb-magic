@@ -45,7 +45,7 @@ Apache Parquet
 query I
 SELECT COUNT(*) FROM read_any('https://raw.githubusercontent.com/tobilg/aws-iam-data/main/data/parquet/aws_services.parquet');
 ----
-463
+464
 
 # --- CSV ---
 
