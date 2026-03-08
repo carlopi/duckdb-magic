@@ -59,34 +59,113 @@ SELECT len(examples) FROM duckdb_functions() WHERE function_name = 'magic_requir
 ----
 2
 
-# URI scheme detection — filesystem extension prepended regardless of file accessibility
+# URI scheme + file type combos
+# All paths below are intentionally inaccessible; format is detected by extension alone.
 
-# gh:// → ['gh'] (community ext)
+# gh:// — scheme only (no recognisable format extension)
 query I
 SELECT magic_required_extensions('gh://duckdb/duckdb/README.md');
 ----
 [gh]
 
-# s3:// → ['httpfs']
+# gh:// + parquet
 query I
-SELECT magic_required_extensions('s3://my-bucket/data.csv');
+SELECT magic_required_extensions('gh://duckdb/duckdb/data/userdata.parquet');
 ----
-[httpfs]
+[gh, parquet]
 
-# https:// → ['httpfs']
+# gh:// + json
 query I
-SELECT magic_required_extensions('https://example.com/data.csv');
+SELECT magic_required_extensions('gh://owner/repo/data.json');
 ----
-[httpfs]
+[gh, json]
 
-# az:// → ['azure']
+# gh:// + geojson → spatial
 query I
-SELECT magic_required_extensions('az://my-container/data.csv');
+SELECT magic_required_extensions('gh://owner/repo/map.geojson');
 ----
-[azure]
+[gh, spatial]
 
-# abfss:// → ['azure']
+# gh:// + yaml
 query I
-SELECT magic_required_extensions('abfss://my-container/data.csv');
+SELECT magic_required_extensions('gh://owner/repo/config.yaml');
 ----
-[azure]
+[gh, yaml]
+
+# gh:// + ipynb → json
+query I
+SELECT magic_required_extensions('gh://owner/repo/notebook.ipynb');
+----
+[gh, json]
+
+# s3:// + parquet
+query I
+SELECT magic_required_extensions('s3://my-bucket/data.parquet');
+----
+[httpfs, parquet]
+
+# s3:// + avro
+query I
+SELECT magic_required_extensions('s3://my-bucket/data.avro');
+----
+[httpfs, avro]
+
+# s3:// + json
+query I
+SELECT magic_required_extensions('s3://my-bucket/events.jsonl');
+----
+[httpfs, json]
+
+# s3a:// + parquet
+query I
+SELECT magic_required_extensions('s3a://my-bucket/data.parquet');
+----
+[httpfs, parquet]
+
+# https:// + parquet
+query I
+SELECT magic_required_extensions('https://example.com/data.parquet');
+----
+[httpfs, parquet]
+
+# https:// + excel
+query I
+SELECT magic_required_extensions('https://example.com/report.xlsx');
+----
+[httpfs, excel]
+
+# https:// + geojson → spatial
+query I
+SELECT magic_required_extensions('https://example.com/boundaries.geojson');
+----
+[httpfs, spatial]
+
+# https:// + yaml
+query I
+SELECT magic_required_extensions('https://example.com/config.yaml');
+----
+[httpfs, yaml]
+
+# az:// + parquet
+query I
+SELECT magic_required_extensions('az://my-container/data.parquet');
+----
+[azure, parquet]
+
+# abfss:// + avro
+query I
+SELECT magic_required_extensions('abfss://my-container/events.avro');
+----
+[azure, avro]
+
+# gcs:// + parquet
+query I
+SELECT magic_required_extensions('gcs://my-bucket/data.parquet');
+----
+[httpfs, parquet]
+
+# r2:// + json
+query I
+SELECT magic_required_extensions('r2://my-bucket/data.json');
+----
+[httpfs, json]

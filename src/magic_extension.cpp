@@ -409,18 +409,22 @@ static vector<string> DetectFormatExtensions(const string &type_str,
     return {};
   }
 
-  // Parquet
-  if (StringUtil::StartsWith(lower_type, "apache parquet")) {
+  // Parquet — magic type primary, extension fallback for remote/unreadable files
+  if (StringUtil::StartsWith(lower_type, "apache parquet") ||
+      StringUtil::EndsWith(lower_path, ".parquet")) {
     return {"parquet"};
   }
 
-  // Avro
-  if (StringUtil::StartsWith(lower_type, "apache avro")) {
+  // Avro — magic type primary, extension fallback
+  if (StringUtil::StartsWith(lower_type, "apache avro") ||
+      StringUtil::EndsWith(lower_path, ".avro")) {
     return {"avro"};
   }
 
-  // Excel
-  if (StringUtil::StartsWith(lower_type, "microsoft excel")) {
+  // Excel — magic type primary, extension fallback
+  if (StringUtil::StartsWith(lower_type, "microsoft excel") ||
+      StringUtil::EndsWith(lower_path, ".xlsx") ||
+      StringUtil::EndsWith(lower_path, ".xls")) {
     return {"excel"};
   }
 
