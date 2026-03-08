@@ -284,11 +284,52 @@ static void TryEnsureCommunityFilesystem(ClientContext &context,
   }
 }
 
+// URI scheme → (extension_name, is_community) mappings.
+// Order matters: longer/more-specific prefixes first.
+struct FilesystemScheme {
+  const char *scheme;
+  const char *extension;
+  bool community;
+};
+static const FilesystemScheme FILESYSTEM_SCHEMES[] = {
+    // HTTP/S and S3-compatible (httpfs core ext)
+    {"https://", "httpfs", false},
+    {"http://",  "httpfs", false},
+    {"s3://",    "httpfs", false},
+    {"s3a://",   "httpfs", false},
+    {"s3n://",   "httpfs", false},
+    {"gcs://",   "httpfs", false},
+    {"gs://",    "httpfs", false},
+    {"r2://",    "httpfs", false},
+    // Azure (azure core ext)
+    {"abfss://", "azure",  false},
+    {"abfs://",  "azure",  false},
+    {"az://",    "azure",  false},
+    // GitHub (gh community ext)
+    {"gh://",    "gh",     true},
+    {nullptr,    nullptr,  false},
+};
+
+static const FilesystemScheme *DetectFilesystemScheme(const string &lower_path) {
+  for (idx_t i = 0; FILESYSTEM_SCHEMES[i].scheme != nullptr; i++) {
+    if (StringUtil::StartsWith(lower_path, FILESYSTEM_SCHEMES[i].scheme)) {
+      return &FILESYSTEM_SCHEMES[i];
+    }
+  }
+  return nullptr;
+}
+
 // Dispatch to the appropriate filesystem loader based on the path URI scheme.
 static void TryEnsureFilesystem(ClientContext &context, const string &path) {
   auto lower = StringUtil::Lower(path);
-  if (StringUtil::StartsWith(lower, "gh://")) {
-    TryEnsureCommunityFilesystem(context, "gh");
+  auto *scheme = DetectFilesystemScheme(lower);
+  if (!scheme) {
+    return;
+  }
+  if (scheme->community) {
+    TryEnsureCommunityFilesystem(context, scheme->extension);
+  } else {
+    ExtensionHelper::TryAutoLoadExtension(context, scheme->extension);
   }
 }
 
@@ -409,9 +450,10 @@ static vector<string> DetectRequiredExtensions(const string &type_str,
 
   vector<string> result;
 
-  // Filesystem extensions (by URI scheme)
-  if (StringUtil::StartsWith(lower_path, "gh://")) {
-    result.push_back("gh");
+  // Filesystem extension (by URI scheme) — prepended before format extensions
+  auto *scheme = DetectFilesystemScheme(lower_path);
+  if (scheme) {
+    result.push_back(scheme->extension);
   }
 
   auto format_exts = DetectFormatExtensions(type_str, mime_str, file_path);

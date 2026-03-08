@@ -59,8 +59,34 @@ SELECT len(examples) FROM duckdb_functions() WHERE function_name = 'magic_requir
 ----
 2
 
-# gh:// URI scheme → ['gh'] (detected from URI scheme even without gh extension loaded)
+# URI scheme detection — filesystem extension prepended regardless of file accessibility
+
+# gh:// → ['gh'] (community ext)
 query I
 SELECT magic_required_extensions('gh://duckdb/duckdb/README.md');
 ----
 [gh]
+
+# s3:// → ['httpfs']
+query I
+SELECT magic_required_extensions('s3://my-bucket/data.csv');
+----
+[httpfs]
+
+# https:// → ['httpfs']
+query I
+SELECT magic_required_extensions('https://example.com/data.csv');
+----
+[httpfs]
+
+# az:// → ['azure']
+query I
+SELECT magic_required_extensions('az://my-container/data.csv');
+----
+[azure]
+
+# abfss:// → ['azure']
+query I
+SELECT magic_required_extensions('abfss://my-container/data.csv');
+----
+[azure]
