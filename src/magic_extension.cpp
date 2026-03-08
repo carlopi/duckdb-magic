@@ -439,6 +439,11 @@ static void MagicRequiredExtensionsFun(DataChunk &args, ExpressionState &state,
 
     auto name = val.GetValue<string>();
 
+    // Detect URI-scheme extensions before attempting to open the file so that
+    // e.g. magic_required_extensions('gh://...') returns ['gh'] even when the
+    // gh extension is not installed and the open would fail.
+    auto uri_exts = DetectRequiredExtensions("", "", name);
+
     // Ensure any filesystem extension (e.g. gh) is loaded before opening
     TryEnsureFilesystem(state.GetContext(), name);
 
@@ -449,7 +454,12 @@ static void MagicRequiredExtensionsFun(DataChunk &args, ExpressionState &state,
       auto handle = fs.OpenFile(name, FileFlags::FILE_FLAGS_READ);
       bytes_read = fs.Read(*handle, buffer, sizeof(buffer) - 1);
     } catch (...) {
-      list_data[i] = {child_offset, 0};
+      // File unreadable — return whatever we detected from the URI scheme alone
+      list_data[i] = {child_offset, uri_exts.size()};
+      for (auto &ext : uri_exts) {
+        ListVector::PushBack(result, Value(ext));
+        child_offset++;
+      }
       continue;
     }
 

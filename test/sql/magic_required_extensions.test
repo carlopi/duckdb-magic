@@ -58,3 +58,9 @@ query I
 SELECT len(examples) FROM duckdb_functions() WHERE function_name = 'magic_required_extensions';
 ----
 2
+
+# gh:// URI scheme → ['gh'] (detected from URI scheme even without gh extension loaded)
+query I
+SELECT magic_required_extensions('gh://duckdb/duckdb/README.md');
+----
+[gh]
