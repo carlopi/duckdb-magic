@@ -271,7 +271,7 @@ static void TryEnsureCommunityFilesystem(ClientContext &context,
     if (Settings::Get<AutoinstallKnownExtensionsSetting>(context) &&
         Settings::Get<AllowCommunityExtensionsSetting>(context)) {
       auto community_repo = ExtensionRepository::GetRepositoryByUrl(
-          ExtensionInstallInfo::COMMUNITY_REPOSITORY_URL);
+          "http://community-extensions.duckdb.org");
       ExtensionInstallOptions options;
       options.repository = community_repo;
       ExtensionHelper::InstallExtension(context, ext_name, options);
