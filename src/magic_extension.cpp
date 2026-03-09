@@ -115,7 +115,7 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                    entry.response.content.mimeType         AS resp_mime,
                FROM (
                    SELECT UNNEST(log.entries) AS entry
-                   FROM read_json_auto(file_name)
+                   FROM read_json_auto(file_name, maximum_object_size=100000000)
                )
            )
        -- TODO (post v1.5.0): add support for community extensions only available on stable releases:
@@ -148,6 +148,27 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, vortex, lance, excel, ods, xml, yaml, spatial and blob')
              ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | vortex | lance | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
              END
+       )
+----   );
+    )"},
+    {DEFAULT_SCHEMA, "read_har", {"file_name", nullptr}, {{nullptr, nullptr}}, R"(
+----CREATE OR REPLACE MACRO read_har(file_name) AS TABLE (
+       SELECT
+           entry.startedDateTime                   AS started_at,
+           entry.request.method                    AS method,
+           entry.request.url                       AS url,
+           entry.response.status                   AS status,
+           entry.response.statusText               AS status_text,
+           entry.time                              AS total_ms,
+           entry.timings.send                      AS send_ms,
+           entry.timings.wait                      AS wait_ms,
+           entry.timings.receive                   AS receive_ms,
+           entry.request.bodySize                  AS req_body_bytes,
+           entry.response.content.size             AS resp_body_bytes,
+           entry.response.content.mimeType         AS resp_mime,
+       FROM (
+           SELECT UNNEST(log.entries) AS entry
+           FROM read_json_auto(file_name, maximum_object_size=100000000)
        )
 ----   );
     )"},
