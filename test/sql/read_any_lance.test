@@ -4,6 +4,8 @@
 
 require magic
 
+mode skip
+
 statement ok
 INSTALL lance FROM community
 

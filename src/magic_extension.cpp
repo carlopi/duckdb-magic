@@ -97,7 +97,6 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                ORDER BY cell_idx
            )
            , "ods_case" as (FROM read_sheet(file_name))
-           , "lance_case" as (FROM query('SELECT * FROM ''' || file_name || ''''))
            , "xml_case" as (FROM read_xml(file_name))
            , "har_case" as (
                SELECT
@@ -141,12 +140,11 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='parquet' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Parquet%') THEN 'parquet_case'
                WHEN format=='avro' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Avro%') THEN 'avro_case'
                WHEN format=='vortex' OR (format=='auto' AND file_name ILIKE '%.vortex') THEN 'vortex_case'
-              WHEN format=='lance' OR (format=='auto' AND file_name ILIKE '%.lance') THEN 'lance_case'
                WHEN format=='excel' OR format=='xlsx' OR (format=='auto' AND magic_type(file_name) ILIKE 'Microsoft Excel%') THEN 'excel_case'
                WHEN format=='ods' OR (format=='auto' AND (magic_type(file_name) ILIKE 'OpenDocument Spreadsheet%' OR magic_mime(file_name) ILIKE '%opendocument.spreadsheet%' OR file_name ILIKE '%.ods')) THEN 'ods_case'
                WHEN format=='xml' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/xml' OR file_name ILIKE '%.xml')) THEN 'xml_case'
-               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, vortex, lance, excel, ods, xml, yaml, spatial and blob')
-             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | vortex | lance | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
+               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, vortex, excel, ods, xml, yaml, spatial and blob')
+             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
              END
        )
 ----   );
@@ -386,11 +384,6 @@ static vector<string> DetectFormatExtensions(const string &type_str,
   // Vortex (detected by extension)
   if (StringUtil::EndsWith(lower_path, ".vortex")) {
     return {"vortex"};
-  }
-
-  // Lance (detected by extension)
-  if (StringUtil::EndsWith(lower_path, ".lance")) {
-    return {"lance"};
   }
 
   // YAML (detected by extension — magic returns text/plain)
