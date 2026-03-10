@@ -27,6 +27,11 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            , "parquet_case" as (FROM read_parquet(file_name))
            , "avro_case" as (FROM read_avro(file_name))
            , "blob_case" as (FROM read_blob(file_name))
+           -- NOTE: spatial extension must be loaded BEFORE read_any is called for any file.
+           --       DuckDB resolves all CTE functions at macro-expansion/bind time, so st_read
+           --       must exist even when a non-spatial file is being read.
+           --       TODO: implement magic_load_extensions(file) to auto-load on demand, or
+           --             convert read_any to a C++ table function for dynamic dispatch.
            , "spatial_case" as (FROM st_read(file_name))
            , "vortex_case" as (FROM read_vortex(file_name))
            , "excel_case" as (FROM read_xlsx(file_name))
@@ -352,6 +357,77 @@ static void TryEnsureFilesystem(ClientContext &context, const string &path) {
   }
 }
 
+// Returns true if the named extension is from the community repository.
+static bool IsExtensionCommunity(const string &ext_name) {
+  for (idx_t i = 0; FILESYSTEM_SCHEMES[i].scheme != nullptr; i++) {
+    if (ext_name == FILESYSTEM_SCHEMES[i].extension) {
+      return FILESYSTEM_SCHEMES[i].community;
+    }
+  }
+  static const char *const community_exts[] = {
+      "vortex", "rusty_sheet", "webbed", "yaml", nullptr};
+  for (idx_t i = 0; community_exts[i] != nullptr; i++) {
+    if (ext_name == community_exts[i])
+      return true;
+  }
+  return false;
+}
+
+// Try to load an extension, installing it first if load fails and settings allow.
+// Returns true if the extension is loaded after the attempt.
+static bool TryInstallAndLoadExtension(ClientContext &context,
+                                       const string &ext_name) {
+  if (context.db->ExtensionIsLoaded(ext_name))
+    return true;
+  // Try load (already installed)
+  try {
+    ExtensionHelper::LoadExternalExtension(context, ext_name);
+    if (context.db->ExtensionIsLoaded(ext_name))
+      return true;
+  } catch (...) {}
+  // Try install + load
+  try {
+    if (Settings::Get<AutoinstallKnownExtensionsSetting>(context)) {
+      auto community_repo = ExtensionRepository::GetRepositoryByUrl(
+          "http://community-extensions.duckdb.org");
+      ExtensionInstallOptions options;
+      if (IsExtensionCommunity(ext_name) &&
+          Settings::Get<AllowCommunityExtensionsSetting>(context)) {
+        options.repository = community_repo;
+      }
+      ExtensionHelper::InstallExtension(context, ext_name, options);
+    }
+  } catch (...) {}
+  try {
+    ExtensionHelper::LoadExternalExtension(context, ext_name);
+  } catch (...) {}
+  return context.db->ExtensionIsLoaded(ext_name);
+}
+
+// Build a clear error message listing missing extensions and how to install them.
+static string BuildMissingExtError(const string &file_path,
+                                   const vector<string> &missing) {
+  string msg;
+  if (missing.size() == 1) {
+    msg = "Extension '" + missing[0] + "' is required to read '" + file_path + "'.\n";
+  } else {
+    msg = "Extensions ";
+    for (idx_t i = 0; i < missing.size(); i++) {
+      if (i > 0) msg += ", ";
+      msg += "'" + missing[i] + "'";
+    }
+    msg += " are required to read '" + file_path + "'.\n";
+  }
+  msg += "Run:";
+  for (auto &ext : missing) {
+    msg += "\n  INSTALL " + ext;
+    if (IsExtensionCommunity(ext))
+      msg += " FROM community";
+    msg += "; LOAD " + ext + ";";
+  }
+  return msg;
+}
+
 // Detect which DuckDB extensions are required for the file format only
 // (not the filesystem). Mirrors the format-detection logic in read_any.
 static vector<string> DetectFormatExtensions(const string &type_str,
@@ -362,6 +438,8 @@ static vector<string> DetectFormatExtensions(const string &type_str,
   auto lower_type = StringUtil::Lower(type_str);
 
   // Spatial — GeoPackage uniquely detectable via mime
+  // NOTE: the spatial extension must be explicitly loaded before read_any can be called
+  //       (st_read is resolved at bind time for all CTEs, not just the selected branch).
   if (StringUtil::Contains(lower_mime, "geopackage")) {
     return {"spatial"};
   }
@@ -479,6 +557,83 @@ static vector<string> DetectRequiredExtensions(const string &type_str,
   return result;
 }
 
+// Read up to 1024 bytes from a file and run libmagic detection.
+// Returns false if the file could not be opened; sets type_str/mime_str on success.
+static bool ReadMagicInfo(MagicBothLocalState &local, FileSystem &fs,
+                           const string &name,
+                           string &type_str, string &mime_str) {
+  char buffer[1024] = {};
+  size_t bytes_read = 0;
+  try {
+    auto handle = fs.OpenFile(name, FileFlags::FILE_FLAGS_READ);
+    bytes_read = fs.Read(*handle, buffer, sizeof(buffer) - 1);
+  } catch (...) {
+    return false;
+  }
+  const char *r;
+  r = magic_buffer(local.magic_type_cookie, buffer, bytes_read);
+  if (r) type_str = r;
+  r = magic_buffer(local.magic_mime_cookie, buffer, bytes_read);
+  if (r) mime_str = r;
+  return true;
+}
+
+// Append a vector<string> to the LIST result vector, updating child_offset.
+static void AppendExtList(Vector &result, list_entry_t *list_data, idx_t i,
+                          const vector<string> &exts, idx_t &child_offset) {
+  list_data[i] = {child_offset, exts.size()};
+  for (auto &ext : exts) {
+    ListVector::PushBack(result, Value(ext));
+    child_offset++;
+  }
+}
+
+static void MagicCheckDependenciesFun(DataChunk &args, ExpressionState &state,
+                                      Vector &result) {
+  auto &name_vector = args.data[0];
+  auto &local = ExecuteFunctionState::GetFunctionState(state)
+                    ->Cast<MagicBothLocalState>();
+  auto &fs = FileSystem::GetFileSystem(state.GetContext());
+  auto &context = state.GetContext();
+
+  auto list_data = ListVector::GetData(result);
+  idx_t child_offset = 0;
+
+  for (idx_t i = 0; i < args.size(); i++) {
+    auto val = name_vector.GetValue(i);
+    if (val.IsNull()) {
+      FlatVector::SetNull(result, i, true);
+      list_data[i] = {child_offset, 0};
+      continue;
+    }
+
+    auto name = val.GetValue<string>();
+    TryEnsureFilesystem(context, name);
+
+    string type_str, mime_str;
+    ReadMagicInfo(local, fs, name, type_str, mime_str);
+
+    auto exts = DetectRequiredExtensions(type_str, mime_str, name);
+
+    vector<string> loaded;
+    vector<string> missing;
+    for (auto &ext : exts) {
+      bool was_loaded = context.db->ExtensionIsLoaded(ext);
+      if (!was_loaded && TryInstallAndLoadExtension(context, ext)) {
+        loaded.push_back(ext);
+      } else if (!context.db->ExtensionIsLoaded(ext)) {
+        missing.push_back(ext);
+      }
+    }
+
+    if (!missing.empty()) {
+      throw IOException(BuildMissingExtError(name, missing));
+    }
+
+    AppendExtList(result, list_data, i, loaded, child_offset);
+  }
+}
+
 static void MagicRequiredExtensionsFun(DataChunk &args, ExpressionState &state,
                                        Vector &result) {
   auto &name_vector = args.data[0];
@@ -507,37 +662,56 @@ static void MagicRequiredExtensionsFun(DataChunk &args, ExpressionState &state,
     // Ensure any filesystem extension (e.g. gh) is loaded before opening
     TryEnsureFilesystem(state.GetContext(), name);
 
-    // Read a buffer from the file for magic detection
-    char buffer[1024] = {};
-    size_t bytes_read = 0;
-    try {
-      auto handle = fs.OpenFile(name, FileFlags::FILE_FLAGS_READ);
-      bytes_read = fs.Read(*handle, buffer, sizeof(buffer) - 1);
-    } catch (...) {
+    string type_str, mime_str;
+    if (!ReadMagicInfo(local, fs, name, type_str, mime_str)) {
       // File unreadable — return whatever we detected from the URI scheme alone
-      list_data[i] = {child_offset, uri_exts.size()};
-      for (auto &ext : uri_exts) {
-        ListVector::PushBack(result, Value(ext));
-        child_offset++;
-      }
+      AppendExtList(result, list_data, i, uri_exts, child_offset);
       continue;
     }
 
+    auto exts = DetectRequiredExtensions(type_str, mime_str, name);
+    AppendExtList(result, list_data, i, exts, child_offset);
+  }
+}
+
+static void MagicLoadExtensionsFun(DataChunk &args, ExpressionState &state,
+                                   Vector &result) {
+  auto &name_vector = args.data[0];
+  auto &local = ExecuteFunctionState::GetFunctionState(state)
+                    ->Cast<MagicBothLocalState>();
+  auto &fs = FileSystem::GetFileSystem(state.GetContext());
+  auto &context = state.GetContext();
+
+  auto list_data = ListVector::GetData(result);
+  idx_t child_offset = 0;
+
+  for (idx_t i = 0; i < args.size(); i++) {
+    auto val = name_vector.GetValue(i);
+    if (val.IsNull()) {
+      FlatVector::SetNull(result, i, true);
+      list_data[i] = {child_offset, 0};
+      continue;
+    }
+
+    auto name = val.GetValue<string>();
+    auto uri_exts = DetectRequiredExtensions("", "", name);
+    TryEnsureFilesystem(context, name);
+
     string type_str, mime_str;
-    const char *r;
-    r = magic_buffer(local.magic_type_cookie, buffer, bytes_read);
-    if (r)
-      type_str = r;
-    r = magic_buffer(local.magic_mime_cookie, buffer, bytes_read);
-    if (r)
-      mime_str = r;
+    if (!ReadMagicInfo(local, fs, name, type_str, mime_str)) {
+      // File unreadable — load and return filesystem extension only
+      for (auto &ext : uri_exts) {
+        try { ExtensionHelper::LoadExternalExtension(context, ext); } catch (...) {}
+      }
+      AppendExtList(result, list_data, i, uri_exts, child_offset);
+      continue;
+    }
 
     auto exts = DetectRequiredExtensions(type_str, mime_str, name);
-    list_data[i] = {child_offset, exts.size()};
     for (auto &ext : exts) {
-      ListVector::PushBack(result, Value(ext));
-      child_offset++;
+      try { ExtensionHelper::LoadExternalExtension(context, ext); } catch (...) {}
     }
+    AppendExtList(result, list_data, i, exts, child_offset);
   }
 }
 
@@ -650,6 +824,55 @@ static void LoadInternal(ExtensionLoader &loader) {
         "SELECT magic_required_extensions('myfile.json');",
         "SELECT file, magic_required_extensions(file) AS exts FROM "
         "glob('data/**/*');",
+    };
+    desc.categories = {"magic"};
+    info.descriptions.push_back(std::move(desc));
+    loader.RegisterFunction(std::move(info));
+  }
+
+  // Register magic_list_dependencies (and magic_load_extensions as alias)
+  // Best-effort: loads detected extensions, returns list of what was loaded.
+  for (auto &fn_name : {"magic_list_dependencies", "magic_load_extensions"}) {
+    ScalarFunction fn(fn_name, {LogicalType::VARCHAR},
+                      LogicalType::LIST(LogicalType::VARCHAR),
+                      MagicLoadExtensionsFun, nullptr, nullptr, nullptr,
+                      MagicBothLocalStateFun);
+    CreateScalarFunctionInfo info(fn);
+    FunctionDescription desc;
+    desc.parameter_names = {"file_path"};
+    desc.parameter_types = {LogicalType::VARCHAR};
+    desc.description =
+        "Best-effort: loads all DuckDB extensions required to read the given "
+        "file with read_any() and returns the list of extensions that were "
+        "loaded. Failures are silently ignored — use magic_load_dependencies() "
+        "if you want an error on missing extensions.";
+    desc.examples = {
+        "SELECT magic_list_dependencies('myfile.geojson'); FROM read_any('myfile.geojson');",
+    };
+    desc.categories = {"magic"};
+    info.descriptions.push_back(std::move(desc));
+    loader.RegisterFunction(std::move(info));
+  }
+
+  // Register magic_load_dependencies
+  // Strict: loads/installs extensions, throws a descriptive error if any are missing.
+  {
+    ScalarFunction fn("magic_load_dependencies", {LogicalType::VARCHAR},
+                      LogicalType::LIST(LogicalType::VARCHAR),
+                      MagicCheckDependenciesFun, nullptr, nullptr, nullptr,
+                      MagicBothLocalStateFun);
+    CreateScalarFunctionInfo info(fn);
+    FunctionDescription desc;
+    desc.parameter_names = {"file_path"};
+    desc.parameter_types = {LogicalType::VARCHAR};
+    desc.description =
+        "Ensures all DuckDB extensions required to read the given file with "
+        "read_any() are loaded, installing them if settings allow. Returns the "
+        "list of extensions that were loaded (empty if all were already "
+        "loaded). Throws a descriptive error if any required extension could "
+        "not be loaded.";
+    desc.examples = {
+        "SELECT magic_load_dependencies('myfile.geojson'); FROM read_any('myfile.geojson');",
     };
     desc.categories = {"magic"};
     info.descriptions.push_back(std::move(desc));
