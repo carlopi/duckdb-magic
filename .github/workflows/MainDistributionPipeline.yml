@@ -16,7 +16,7 @@ jobs:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_version: 3a3967aa8190d0a2d1931d4ca4f5d920760030b4
+      duckdb_version: v1.5.0
       ci_tools_version: main
       extension_name: magic
       exclude_archs: 'linux_amd64_musl;windows_amd64_mingw;windows_amd64'
