@@ -36,6 +36,34 @@ LOAD httpfs;
 FROM read_any('https://raw.githubusercontent.com/duckdb/duckdb/main/data/parquet-testing/adam_genotypes.parquet');
 ```
 
+### Supported formats in `read_any`
+
+| Format | Description | Detection | Requires |
+|--------|-------------|-----------|----------|
+| `csv` | Delimited text (CSV/TSV) | magic mime (`text/plain`, `text/csv`) | core |
+| `json` | JSON and newline-delimited JSON | magic mime + file ext (`.json`, `.jsonl`, `.ndjson`) | `json` |
+| `parquet` | Apache Parquet columnar format | magic type (`Apache Parquet`) | `parquet` |
+| `avro` | Apache Avro serialization format | magic type (`Apache Avro`) | `avro` |
+| `excel` | Microsoft Excel workbooks | magic type (`Microsoft Excel`) | `excel` |
+| `ods` | OpenDocument Spreadsheet | magic type + file ext (`.ods`) | `rusty_sheet` (community) |
+| `yaml` | YAML data files | file ext (`.yaml`, `.yml`) | `yaml` (community) |
+| `xml` | XML documents | magic mime (`text/xml`) + file ext (`.xml`) | `webbed` (community) |
+| `ics` | iCalendar / calendar events | magic mime (`text/calendar`) + file ext (`.ics`, `.ical`) | core |
+| `ipynb` | Jupyter notebooks — one row per cell | file ext (`.ipynb`) | `json` |
+| `har` | HTTP Archive — one row per request | file ext (`.har`) | `json` |
+| `spatial` | GeoJSON / GeoJSONL / NDGeoJSON | file ext (`.geojson`, `.geojsonl`, `.ndgeojson`) | `spatial` |
+| `spatial` | TopoJSON | file ext (`.topojson`) | `spatial` |
+| `spatial` | FlatGeobuf | file ext (`.fgb`) | `spatial` |
+| `spatial` | Shapefile | file ext (`.shp`, `.prj`) | `spatial` |
+| `spatial` | KML | file ext (`.kml`) | `spatial` |
+| `spatial` | GeoPackage | magic mime (`geopackage`) | `spatial` |
+| `spatial` | Other GDAL-supported formats | explicit `format:='spatial'` only | `spatial` |
+| `vortex` | Vortex columnar format | file ext (`.vortex`) | `vortex` (community) |
+| `lance` | Lance columnar format | file ext (`.lance`) | `lance` (community) |
+| `blob` | Raw binary — returns the file as a single blob value | fallback / explicit | core |
+
+Use `format:='<name>'` to override auto-detection, e.g. `FROM read_any('myfile', format:='csv')`.
+
 This repository is based on https://github.com/duckdb/extension-template, check it out if you want to build and ship your own DuckDB extension.
 
 ---

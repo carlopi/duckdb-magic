@@ -1,0 +1,34 @@
+# name: test/sql/read_any_remote_avro.test
+# description: test read_any with publicly available remote avro files
+# group: [sql]
+
+require magic
+
+statement ok
+INSTALL httpfs
+
+statement ok
+LOAD httpfs
+
+statement ok
+INSTALL avro
+
+statement ok
+LOAD avro
+
+# magic detection on a remote avro file
+query I
+SELECT magic_type('https://raw.githubusercontent.com/duckdb/duckdb_avro/main/test/users.avro');
+----
+Apache Avro version 1
+
+# read_any auto-detects avro via magic_type ILIKE 'Apache Avro%'
+query I
+SELECT COUNT(*) FROM read_any('https://raw.githubusercontent.com/duckdb/duckdb_avro/main/test/users.avro');
+----
+2
+
+query I
+SELECT COUNT(*) FROM read_any('https://raw.githubusercontent.com/duckdb/duckdb_avro/main/test/userdata1.avro');
+----
+1000

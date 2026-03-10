@@ -1,0 +1,39 @@
+# name: test/sql/read_any_excel.test
+# description: test read_any with Excel (xlsx) file format
+# group: [sql]
+
+require magic
+
+statement ok
+INSTALL excel
+
+statement ok
+LOAD excel
+
+# create a local xlsx file
+statement ok
+COPY (SELECT 42 AS answer, 'hello' AS word FROM range(5)) TO '__TEST_DIR__/test.xlsx' WITH (FORMAT xlsx, header true)
+
+# magic detection on an xlsx file
+query I
+SELECT magic_type('__TEST_DIR__/test.xlsx');
+----
+Microsoft Excel 2007+
+
+# auto-detected via magic_type ILIKE 'Microsoft Excel%'
+query I
+SELECT COUNT(*) FROM read_any('__TEST_DIR__/test.xlsx');
+----
+5
+
+# explicit format:='excel' also works
+query I
+SELECT COUNT(*) FROM read_any('__TEST_DIR__/test.xlsx', format:='excel');
+----
+5
+
+# explicit format:='xlsx' also works
+query I
+SELECT COUNT(*) FROM read_any('__TEST_DIR__/test.xlsx', format:='xlsx');
+----
+5

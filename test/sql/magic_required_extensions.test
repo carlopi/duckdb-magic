@@ -1,0 +1,171 @@
+# name: test/sql/magic_required_extensions.test
+# description: test magic_required_extensions function
+# group: [sql]
+
+require magic
+
+require parquet
+
+# Create parquet and CSV fixtures dynamically;
+# JSON fixture is a static file at test/sql/data/test-files/magic_req_test.json
+# (avoids requiring the json extension in the test runner).
+statement ok
+COPY (SELECT 42 AS x, 'hello' AS y) TO 'magic_req_test.parquet';
+
+statement ok
+COPY (SELECT 42 AS x, 'hello' AS y) TO 'magic_req_test.csv';
+
+statement ok
+ATTACH 'magic_req_test.db';
+
+# Parquet → ['parquet']
+query I
+SELECT magic_required_extensions('magic_req_test.parquet');
+----
+[parquet]
+
+# JSON → ['json']
+query I
+SELECT magic_required_extensions('${DATA_DIR}/test-files/magic_req_test.json');
+----
+[json]
+
+# CSV → [] (built-in)
+query I
+SELECT magic_required_extensions('magic_req_test.csv');
+----
+[]
+
+# DuckDB db file (unknown/blob) → []
+query I
+SELECT magic_required_extensions('magic_req_test.db');
+----
+[]
+
+# NULL input → NULL
+query I
+SELECT magic_required_extensions(NULL);
+----
+NULL
+
+# Function metadata
+query T
+SELECT description FROM duckdb_functions() WHERE function_name = 'magic_required_extensions';
+----
+Returns the list of DuckDB extensions that must be loaded before reading the given file with read_any(). Returns an empty list for built-in formats (CSV, blob).
+
+query I
+SELECT len(examples) FROM duckdb_functions() WHERE function_name = 'magic_required_extensions';
+----
+2
+
+# URI scheme + file type combos
+# All paths below are intentionally inaccessible; format is detected by extension alone.
+
+# gh:// — scheme only (no recognisable format extension)
+query I
+SELECT magic_required_extensions('gh://duckdb/duckdb/README.md');
+----
+[gh]
+
+# gh:// + parquet
+query I
+SELECT magic_required_extensions('gh://duckdb/duckdb/data/userdata.parquet');
+----
+[gh, parquet]
+
+# gh:// + json
+query I
+SELECT magic_required_extensions('gh://owner/repo/data.json');
+----
+[gh, json]
+
+# gh:// + geojson → spatial
+query I
+SELECT magic_required_extensions('gh://owner/repo/map.geojson');
+----
+[gh, spatial]
+
+# gh:// + yaml
+query I
+SELECT magic_required_extensions('gh://owner/repo/config.yaml');
+----
+[gh, yaml]
+
+# gh:// + ipynb → json
+query I
+SELECT magic_required_extensions('gh://owner/repo/notebook.ipynb');
+----
+[gh, json]
+
+# s3:// + parquet
+query I
+SELECT magic_required_extensions('s3://my-bucket/data.parquet');
+----
+[httpfs, parquet]
+
+# s3:// + avro
+query I
+SELECT magic_required_extensions('s3://my-bucket/data.avro');
+----
+[httpfs, avro]
+
+# s3:// + json
+query I
+SELECT magic_required_extensions('s3://my-bucket/events.jsonl');
+----
+[httpfs, json]
+
+# s3a:// + parquet
+query I
+SELECT magic_required_extensions('s3a://my-bucket/data.parquet');
+----
+[httpfs, parquet]
+
+# https:// + parquet
+query I
+SELECT magic_required_extensions('https://example.com/data.parquet');
+----
+[httpfs, parquet]
+
+# https:// + excel
+query I
+SELECT magic_required_extensions('https://example.com/report.xlsx');
+----
+[httpfs, excel]
+
+# https:// + geojson → spatial
+query I
+SELECT magic_required_extensions('https://example.com/boundaries.geojson');
+----
+[httpfs, spatial]
+
+# https:// + yaml
+query I
+SELECT magic_required_extensions('https://example.com/config.yaml');
+----
+[httpfs, yaml]
+
+# az:// + parquet
+query I
+SELECT magic_required_extensions('az://my-container/data.parquet');
+----
+[azure, parquet]
+
+# abfss:// + avro
+query I
+SELECT magic_required_extensions('abfss://my-container/events.avro');
+----
+[azure, avro]
+
+# gcs:// + parquet
+query I
+SELECT magic_required_extensions('gcs://my-bucket/data.parquet');
+----
+[httpfs, parquet]
+
+# r2:// + json
+query I
+SELECT magic_required_extensions('r2://my-bucket/data.json');
+----
+[httpfs, json]

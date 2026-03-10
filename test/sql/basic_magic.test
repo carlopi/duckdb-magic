@@ -1,6 +1,6 @@
 # name: test/sql/basic_magic.test
 # description: test magic extension
-# group: [magic]
+# group: [sql]
 
 require magic
 
@@ -16,3 +16,25 @@ query I
 SELECT magic_mime('duckdb_file.db');
 ----
 application/octet-stream
+
+# Function metadata: description and examples
+query T
+SELECT description FROM duckdb_functions() WHERE function_name = 'magic_type';
+----
+Returns the file type description for the given file path using the libmagic database (e.g. 'Apache Parquet', 'JSON data').
+
+query I
+SELECT len(examples) FROM duckdb_functions() WHERE function_name = 'magic_type';
+----
+2
+
+query T
+SELECT description FROM duckdb_functions() WHERE function_name = 'magic_mime';
+----
+Returns the MIME type for the given file path using the libmagic database (e.g. 'application/json', 'text/plain').
+
+query I
+SELECT len(examples) FROM duckdb_functions() WHERE function_name = 'magic_mime';
+----
+2
+

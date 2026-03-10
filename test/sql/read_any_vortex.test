@@ -1,0 +1,31 @@
+# name: test/sql/read_any_vortex.test
+# description: test read_any with vortex file format
+# group: [sql]
+
+require magic
+
+statement ok
+INSTALL vortex
+
+statement ok
+LOAD vortex
+
+# create a local vortex file
+statement ok
+COPY (SELECT i, i*2 AS double_i FROM generate_series(1, 5) t(i)) TO '__TEST_DIR__/test.vortex' (FORMAT VORTEX)
+
+# .vortex extension: auto-detected by file name pattern
+query I
+SELECT COUNT(*) FROM read_any('__TEST_DIR__/test.vortex');
+----
+5
+
+# verify data roundtrips correctly
+query II
+SELECT i, double_i FROM read_any('__TEST_DIR__/test.vortex') ORDER BY i;
+----
+1	2
+2	4
+3	6
+4	8
+5	10
