@@ -26,6 +26,7 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            , "csv_case" as (FROM read_csv(file_name))
            , "parquet_case" as (FROM read_parquet(file_name))
            , "avro_case" as (FROM read_avro(file_name))
+           , "arrow_case" as (FROM read_arrow(file_name))
            , "blob_case" as (FROM read_blob(file_name))
            , "spatial_case" as (FROM st_read(file_name))
            , "vortex_case" as (FROM read_vortex(file_name))
@@ -118,7 +119,6 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                )
            )
        -- TODO (post v1.5.0): add support for community extensions only available on stable releases:
-       --   - Arrow IPC (.arrow)  via nanoarrow:  magic returns 'data', detect by file extension
        --   - HDF5 (.h5/.hdf5)   via h5db:        magic returns 'application/x-hdf5', detect via magic_mime
        --                         h5_read() requires a dataset path arg (not just a file path), so it can't fit
        --                         the read_any(file) pattern directly. Options: (a) use h5_tree() to show structure
@@ -140,11 +140,13 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='parquet' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Parquet%') THEN 'parquet_case'
                WHEN format=='avro' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Avro%') THEN 'avro_case'
                WHEN format=='vortex' OR (format=='auto' AND file_name ILIKE '%.vortex') THEN 'vortex_case'
+               -- Arrow IPC: magic returns generic 'data', detect by file extension
+               WHEN format=='arrow' OR format=='ipc' OR (format=='auto' AND (file_name ILIKE '%.arrow' OR file_name ILIKE '%.arrows' OR file_name ILIKE '%.ipc')) THEN 'arrow_case'
                WHEN format=='excel' OR format=='xlsx' OR (format=='auto' AND magic_type(file_name) ILIKE 'Microsoft Excel%') THEN 'excel_case'
                WHEN format=='ods' OR (format=='auto' AND (magic_type(file_name) ILIKE 'OpenDocument Spreadsheet%' OR magic_mime(file_name) ILIKE '%opendocument.spreadsheet%' OR file_name ILIKE '%.ods')) THEN 'ods_case'
                WHEN format=='xml' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/xml' OR file_name ILIKE '%.xml')) THEN 'xml_case'
-               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, vortex, excel, ods, xml, yaml, spatial and blob')
-             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
+               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, vortex, excel, ods, xml, yaml, spatial and blob')
+             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
              END
        )
 ----   );
@@ -384,6 +386,13 @@ static vector<string> DetectFormatExtensions(const string &type_str,
   // Vortex (detected by extension)
   if (StringUtil::EndsWith(lower_path, ".vortex")) {
     return {"vortex"};
+  }
+
+  // Arrow IPC (detected by extension — magic returns generic 'data')
+  if (StringUtil::EndsWith(lower_path, ".arrow") ||
+      StringUtil::EndsWith(lower_path, ".arrows") ||
+      StringUtil::EndsWith(lower_path, ".ipc")) {
+    return {"nanoarrow"};
   }
 
   // YAML (detected by extension — magic returns text/plain)
