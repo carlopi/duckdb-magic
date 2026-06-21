@@ -66,37 +66,37 @@ SELECT len(examples) FROM duckdb_functions() WHERE function_name = 'magic_requir
 query I
 SELECT magic_required_extensions('gh://duckdb/duckdb/README.md');
 ----
-[gh]
+[gh@community]
 
 # gh:// + parquet
 query I
 SELECT magic_required_extensions('gh://duckdb/duckdb/data/userdata.parquet');
 ----
-[gh, parquet]
+[gh@community, parquet]
 
 # gh:// + json
 query I
 SELECT magic_required_extensions('gh://owner/repo/data.json');
 ----
-[gh, json]
+[gh@community, json]
 
 # gh:// + geojson → spatial
 query I
 SELECT magic_required_extensions('gh://owner/repo/map.geojson');
 ----
-[gh, spatial]
+[gh@community, spatial]
 
 # gh:// + yaml
 query I
 SELECT magic_required_extensions('gh://owner/repo/config.yaml');
 ----
-[gh, yaml]
+[gh@community, yaml@community]
 
 # gh:// + ipynb → json
 query I
 SELECT magic_required_extensions('gh://owner/repo/notebook.ipynb');
 ----
-[gh, json]
+[gh@community, json]
 
 # s3:// + parquet
 query I
@@ -144,7 +144,7 @@ SELECT magic_required_extensions('https://example.com/boundaries.geojson');
 query I
 SELECT magic_required_extensions('https://example.com/config.yaml');
 ----
-[httpfs, yaml]
+[httpfs, yaml@community]
 
 # az:// + parquet
 query I

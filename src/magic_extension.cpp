@@ -32,6 +32,7 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            , "s3_tables_case" as (FROM read_attacheable_database(file_name, type:='iceberg', options:=MAP {'endpoint_type': 's3_tables'}, relative_path:=relative_path))
            , "postgres_case" as (FROM read_attacheable_database(file_name, type:='postgres', relative_path:=relative_path))
            , "mysql_case" as (FROM read_attacheable_database(file_name, type:='mysql', relative_path:=relative_path))
+           , "lance_case" as (FROM __lance_scan(file_name))
            , "sqlite_case" as (FROM read_attacheable_database(file_name, type:='sqlite', relative_path:=relative_path))
            , "blob_case" as (FROM read_blob(file_name))
            , "spatial_case" as (FROM st_read(file_name))
@@ -140,6 +141,8 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='postgres' OR (format=='auto' AND (file_name ILIKE 'postgres://%' OR file_name ILIKE 'postgresql://%')) THEN 'postgres_case'
                -- MySQL connection string: detect by URI scheme (not a file)
                WHEN format=='mysql' OR (format=='auto' AND file_name ILIKE 'mysql://%') THEN 'mysql_case'
+               -- Lance dataset: a directory (magic can't sniff it), detect by .lance suffix
+               WHEN format=='lance' OR (format=='auto' AND file_name ILIKE '%.lance') THEN 'lance_case'
                -- NOTE: .gml is excluded (GDAL fetches remote XSD schema, hangs without network)
                --       .osm is excluded (GDAL OSM driver requires a config file, crashes without it)
                --       .gpx is excluded (GDAL GPX driver crashes on read in current spatial version)
@@ -161,8 +164,8 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='excel' OR format=='xlsx' OR (format=='auto' AND magic_type(file_name) ILIKE 'Microsoft Excel%') THEN 'excel_case'
                WHEN format=='ods' OR (format=='auto' AND (magic_type(file_name) ILIKE 'OpenDocument Spreadsheet%' OR magic_mime(file_name) ILIKE '%opendocument.spreadsheet%' OR file_name ILIKE '%.ods')) THEN 'ods_case'
                WHEN format=='xml' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/xml' OR file_name ILIKE '%.xml')) THEN 'xml_case'
-               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, duckdb, sqlite, s3tables, postgres, mysql, vortex, excel, ods, xml, yaml, spatial and blob')
-             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | duckdb | sqlite | s3tables | postgres | mysql | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
+               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, duckdb, sqlite, s3tables, postgres, mysql, lance, vortex, excel, ods, xml, yaml, spatial and blob')
+             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | duckdb | sqlite | s3tables | postgres | mysql | lance | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
              END
        )
 ----   );
@@ -426,7 +429,7 @@ static vector<string> DetectFormatExtensions(const string &type_str,
   if (StringUtil::EndsWith(lower_path, ".arrow") ||
       StringUtil::EndsWith(lower_path, ".arrows") ||
       StringUtil::EndsWith(lower_path, ".ipc")) {
-    return {"nanoarrow"};
+    return {"nanoarrow@community"};
   }
 
   // DuckDB database file — read via built-in read_attacheable_database (no extension)
@@ -443,10 +446,15 @@ static vector<string> DetectFormatExtensions(const string &type_str,
     return {"sqlite"};
   }
 
+  // Lance dataset (a directory) — detected by extension
+  if (StringUtil::EndsWith(lower_path, ".lance")) {
+    return {"lance"};
+  }
+
   // YAML (detected by extension — magic returns text/plain)
   if (StringUtil::EndsWith(lower_path, ".yaml") ||
       StringUtil::EndsWith(lower_path, ".yml")) {
-    return {"yaml"};
+    return {"yaml@community"};
   }
 
   // Jupyter notebook — detected by extension before generic JSON catch
@@ -503,13 +511,13 @@ static vector<string> DetectFormatExtensions(const string &type_str,
   if (StringUtil::StartsWith(lower_type, "opendocument spreadsheet") ||
       StringUtil::Contains(lower_mime, "opendocument.spreadsheet") ||
       StringUtil::EndsWith(lower_path, ".ods")) {
-    return {"rusty_sheet"};
+    return {"rusty_sheet@community"};
   }
 
   // XML — via webbed (checked after spatial so KML/GML don't match)
   if (StringUtil::Contains(lower_mime, "text/xml") ||
       StringUtil::EndsWith(lower_path, ".xml")) {
-    return {"webbed"};
+    return {"webbed@community"};
   }
 
   // Blob / unknown — no extension needed
@@ -518,6 +526,10 @@ static vector<string> DetectFormatExtensions(const string &type_str,
 
 // Full required-extensions list: filesystem extension (e.g. "gh") prepended
 // to the format extension(s). This is what magic_required_extensions() returns.
+// Community extensions are reported as "name@community" (so callers install them
+// from the community repo); core extensions stay plain "name". The tag is added
+// at the definition site: filesystems via the scheme table's `community` flag,
+// formats via DetectFormatExtensions returning the tagged name directly.
 static vector<string> DetectRequiredExtensions(const string &type_str,
                                                const string &mime_str,
                                                const string &file_path) {
@@ -528,7 +540,8 @@ static vector<string> DetectRequiredExtensions(const string &type_str,
   // Filesystem extension (by URI scheme) — prepended before format extensions
   auto *scheme = DetectFilesystemScheme(lower_path);
   if (scheme) {
-    result.push_back(scheme->extension);
+    result.push_back(scheme->community ? string(scheme->extension) + "@community"
+                                       : string(scheme->extension));
   }
 
   auto format_exts = DetectFormatExtensions(type_str, mime_str, file_path);
