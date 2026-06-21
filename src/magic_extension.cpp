@@ -31,6 +31,8 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            , "duckdb_case" as (FROM read_attacheable_database(file_name, type:='duckdb', relative_path:=relative_path))
            , "s3_tables_case" as (FROM read_attacheable_database(file_name, type:='iceberg', options:=MAP {'endpoint_type': 's3_tables'}, relative_path:=relative_path))
            , "postgres_case" as (FROM read_attacheable_database(file_name, type:='postgres', relative_path:=relative_path))
+           , "mysql_case" as (FROM read_attacheable_database(file_name, type:='mysql', relative_path:=relative_path))
+           , "sqlite_case" as (FROM read_attacheable_database(file_name, type:='sqlite', relative_path:=relative_path))
            , "blob_case" as (FROM read_blob(file_name))
            , "spatial_case" as (FROM st_read(file_name))
            , "vortex_case" as (FROM read_vortex(file_name))
@@ -136,6 +138,8 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='s3tables' OR format=='s3_tables' OR (format=='auto' AND file_name ILIKE 'arn:aws:s3tables:%') THEN 's3_tables_case'
                -- Postgres connection string: detect by URI scheme (not a file)
                WHEN format=='postgres' OR (format=='auto' AND (file_name ILIKE 'postgres://%' OR file_name ILIKE 'postgresql://%')) THEN 'postgres_case'
+               -- MySQL connection string: detect by URI scheme (not a file)
+               WHEN format=='mysql' OR (format=='auto' AND file_name ILIKE 'mysql://%') THEN 'mysql_case'
                -- NOTE: .gml is excluded (GDAL fetches remote XSD schema, hangs without network)
                --       .osm is excluded (GDAL OSM driver requires a config file, crashes without it)
                --       .gpx is excluded (GDAL GPX driver crashes on read in current spatial version)
@@ -153,11 +157,12 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='arrow' OR format=='ipc' OR (format=='auto' AND (file_name ILIKE '%.arrow' OR file_name ILIKE '%.arrows' OR file_name ILIKE '%.ipc')) THEN 'arrow_case'
                -- DuckDB database file: read via read_attacheable_database (built-in, no extension)
                WHEN format=='duckdb' OR (format=='auto' AND magic_type(file_name) ILIKE 'DuckDB database file%') THEN 'duckdb_case'
+               WHEN format=='sqlite' OR (format=='auto' AND (magic_type(file_name) ILIKE 'SQLite format 3%' OR file_name ILIKE '%.sqlite' OR file_name ILIKE '%.sqlite3')) THEN 'sqlite_case'
                WHEN format=='excel' OR format=='xlsx' OR (format=='auto' AND magic_type(file_name) ILIKE 'Microsoft Excel%') THEN 'excel_case'
                WHEN format=='ods' OR (format=='auto' AND (magic_type(file_name) ILIKE 'OpenDocument Spreadsheet%' OR magic_mime(file_name) ILIKE '%opendocument.spreadsheet%' OR file_name ILIKE '%.ods')) THEN 'ods_case'
                WHEN format=='xml' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/xml' OR file_name ILIKE '%.xml')) THEN 'xml_case'
-               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, duckdb, s3tables, postgres, vortex, excel, ods, xml, yaml, spatial and blob')
-             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | duckdb | s3tables | postgres | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
+               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, duckdb, sqlite, s3tables, postgres, mysql, vortex, excel, ods, xml, yaml, spatial and blob')
+             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | duckdb | sqlite | s3tables | postgres | mysql | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
              END
        )
 ----   );
@@ -429,6 +434,13 @@ static vector<string> DetectFormatExtensions(const string &type_str,
       StringUtil::EndsWith(lower_path, ".duckdb") ||
       StringUtil::EndsWith(lower_path, ".ddb")) {
     return {};
+  }
+
+  // SQLite database file — read via read_attacheable_database (needs sqlite_scanner)
+  if (StringUtil::StartsWith(lower_type, "sqlite format 3") ||
+      StringUtil::EndsWith(lower_path, ".sqlite") ||
+      StringUtil::EndsWith(lower_path, ".sqlite3")) {
+    return {"sqlite"};
   }
 
   // YAML (detected by extension — magic returns text/plain)
