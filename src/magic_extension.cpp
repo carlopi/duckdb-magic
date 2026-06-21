@@ -33,6 +33,8 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            , "postgres_case" as (FROM read_attacheable_database(file_name, type:='postgres', relative_path:=relative_path))
            , "mysql_case" as (FROM read_attacheable_database(file_name, type:='mysql', relative_path:=relative_path))
            , "lance_case" as (FROM __lance_scan(file_name))
+           , "ducklake_case" as (FROM read_attacheable_database(regexp_replace(file_name, '^ducklake:', ''), type:='ducklake', relative_path:=relative_path))
+           , "motherduck_case" as (FROM read_attacheable_database(regexp_replace(file_name, '^md:', ''), type:='motherduck', relative_path:=relative_path))
            , "sqlite_case" as (FROM read_attacheable_database(file_name, type:='sqlite', relative_path:=relative_path))
            , "blob_case" as (FROM read_blob(file_name))
            , "spatial_case" as (FROM st_read(file_name))
@@ -143,6 +145,11 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='mysql' OR (format=='auto' AND file_name ILIKE 'mysql://%') THEN 'mysql_case'
                -- Lance dataset: a directory (magic can't sniff it), detect by .lance suffix
                WHEN format=='lance' OR (format=='auto' AND file_name ILIKE '%.lance') THEN 'lance_case'
+               -- DuckLake catalog: ducklake: prefix (metadata is itself a DuckDB/SQLite/Postgres db,
+               -- so the prefix is required to override plain duckdb detection)
+               WHEN format=='ducklake' OR (format=='auto' AND file_name ILIKE 'ducklake:%') THEN 'ducklake_case'
+               -- MotherDuck: md: prefix → strip + attach as motherduck
+               WHEN format=='motherduck' OR format=='md' OR (format=='auto' AND file_name ILIKE 'md:%') THEN 'motherduck_case'
                -- NOTE: .gml is excluded (GDAL fetches remote XSD schema, hangs without network)
                --       .osm is excluded (GDAL OSM driver requires a config file, crashes without it)
                --       .gpx is excluded (GDAL GPX driver crashes on read in current spatial version)
@@ -164,8 +171,8 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='excel' OR format=='xlsx' OR (format=='auto' AND magic_type(file_name) ILIKE 'Microsoft Excel%') THEN 'excel_case'
                WHEN format=='ods' OR (format=='auto' AND (magic_type(file_name) ILIKE 'OpenDocument Spreadsheet%' OR magic_mime(file_name) ILIKE '%opendocument.spreadsheet%' OR file_name ILIKE '%.ods')) THEN 'ods_case'
                WHEN format=='xml' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/xml' OR file_name ILIKE '%.xml')) THEN 'xml_case'
-               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, duckdb, sqlite, s3tables, postgres, mysql, lance, vortex, excel, ods, xml, yaml, spatial and blob')
-             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | duckdb | sqlite | s3tables | postgres | mysql | lance | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
+               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, duckdb, sqlite, s3tables, postgres, mysql, ducklake, motherduck, lance, vortex, excel, ods, xml, yaml, spatial and blob')
+             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | duckdb | sqlite | s3tables | postgres | mysql | ducklake | motherduck (or md alias) | lance | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
              END
        )
 ----   );
@@ -398,6 +405,16 @@ static vector<string> DetectFormatExtensions(const string &type_str,
   // S3 Tables (Iceberg) — detected by ARN prefix (not a file; checked first)
   if (StringUtil::StartsWith(lower_path, "arn:aws:s3tables:")) {
     return {"iceberg"};
+  }
+
+  // DuckLake catalog (ducklake: prefix) — read the metadata db as a lakehouse
+  if (StringUtil::StartsWith(lower_path, "ducklake:")) {
+    return {"ducklake"};
+  }
+
+  // MotherDuck (md: prefix)
+  if (StringUtil::StartsWith(lower_path, "md:")) {
+    return {"motherduck"};
   }
 
   // Spatial — GeoPackage uniquely detectable via mime
