@@ -28,6 +28,7 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            , "parquet_case" as (FROM read_parquet(file_name))
            , "avro_case" as (FROM read_avro(file_name))
            , "arrow_case" as (FROM read_arrow(file_name))
+           , "read_stat_case" as (FROM read_stat(file_name))
            , "duckdb_case" as (FROM read_attacheable_database(file_name, type:='duckdb', relative_path:=relative_path))
            , "s3_tables_case" as (FROM read_attacheable_database(file_name, type:='iceberg', options:=MAP {'endpoint_type': 's3_tables'}, relative_path:=relative_path))
            , "postgres_case" as (FROM read_attacheable_database(file_name, type:='postgres', relative_path:=relative_path))
@@ -168,14 +169,16 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='vortex' OR (format=='auto' AND file_name ILIKE '%.vortex') THEN 'vortex_case'
                -- Arrow IPC: magic returns generic 'data', detect by file extension
                WHEN format=='arrow' OR format=='ipc' OR (format=='auto' AND (file_name ILIKE '%.arrow' OR file_name ILIKE '%.arrows' OR file_name ILIKE '%.ipc')) THEN 'arrow_case'
+               -- Stata/SPSS/SAS via read_stat: magic returns generic 'data', detect by extension
+               WHEN format=='stat' OR format=='read_stat' OR (format=='auto' AND (file_name ILIKE '%.dta' OR file_name ILIKE '%.sav' OR file_name ILIKE '%.zsav' OR file_name ILIKE '%.por' OR file_name ILIKE '%.sas7bdat' OR file_name ILIKE '%.xpt')) THEN 'read_stat_case'
                -- DuckDB database file: read via read_attacheable_database (built-in, no extension)
                WHEN format=='duckdb' OR (format=='auto' AND magic_type(file_name) ILIKE 'DuckDB database file%') THEN 'duckdb_case'
                WHEN format=='sqlite' OR (format=='auto' AND (magic_type(file_name) ILIKE 'SQLite format 3%' OR file_name ILIKE '%.sqlite' OR file_name ILIKE '%.sqlite3')) THEN 'sqlite_case'
                WHEN format=='excel' OR format=='xlsx' OR (format=='auto' AND magic_type(file_name) ILIKE 'Microsoft Excel%') THEN 'excel_case'
                WHEN format=='ods' OR (format=='auto' AND (magic_type(file_name) ILIKE 'OpenDocument Spreadsheet%' OR magic_mime(file_name) ILIKE '%opendocument.spreadsheet%' OR file_name ILIKE '%.ods')) THEN 'ods_case'
                WHEN format=='xml' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/xml' OR file_name ILIKE '%.xml')) THEN 'xml_case'
-               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, duckdb, sqlite, s3tables, postgres, mysql, mongo, ducklake, motherduck, lance, vortex, excel, ods, xml, yaml, spatial and blob')
-             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | duckdb | sqlite | s3tables | postgres | mysql | mongo | ducklake | motherduck (or md alias) | lance | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
+               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, stat, duckdb, sqlite, s3tables, postgres, mysql, mongo, ducklake, motherduck, lance, vortex, excel, ods, xml, yaml, spatial and blob')
+             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | stat (or read_stat alias) | duckdb | sqlite | s3tables | postgres | mysql | mongo | ducklake | motherduck (or md alias) | lance | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
              END
        )
 ----   );
@@ -456,6 +459,16 @@ static vector<string> DetectFormatExtensions(const string &type_str,
       StringUtil::EndsWith(lower_path, ".arrows") ||
       StringUtil::EndsWith(lower_path, ".ipc")) {
     return {"nanoarrow@community"};
+  }
+
+  // Stata/SPSS/SAS via read_stat (community) — detected by extension
+  if (StringUtil::EndsWith(lower_path, ".dta") ||
+      StringUtil::EndsWith(lower_path, ".sav") ||
+      StringUtil::EndsWith(lower_path, ".zsav") ||
+      StringUtil::EndsWith(lower_path, ".por") ||
+      StringUtil::EndsWith(lower_path, ".sas7bdat") ||
+      StringUtil::EndsWith(lower_path, ".xpt")) {
+    return {"read_stat@community"};
   }
 
   // DuckDB database file — read via built-in read_attacheable_database (no extension)
