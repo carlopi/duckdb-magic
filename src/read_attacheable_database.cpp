@@ -92,13 +92,21 @@ static void ParseOptionsMap(const Value &map_value, unordered_map<string, Value>
 	}
 }
 
+// System schemas (pg_catalog, information_schema, ...) are marked internal and
+// can be huge / expensive to enumerate on remote catalogs — skip them. But
+// DuckDB and SQLite mark the default 'main' schema internal even for a user
+// database, so keep that one (it holds the user's tables).
+static bool IsSystemSchema(SchemaCatalogEntry &schema) {
+	return schema.internal && !StringUtil::CIEquals(schema.name, "main");
+}
+
 static string BuildCandidateList(Catalog &catalog, ClientContext &context) {
 	// Only user-facing tables, capped — internal schemas (pg_catalog, ...) are huge
 	// and irrelevant as selection candidates.
 	const idx_t MAX_CANDIDATES = 50;
 	vector<string> candidates;
 	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
-		if (schema.internal || candidates.size() >= MAX_CANDIDATES) {
+		if (candidates.size() >= MAX_CANDIDATES || IsSystemSchema(schema)) {
 			return;
 		}
 		schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
@@ -192,7 +200,7 @@ static unique_ptr<FunctionData> ReadAttacheableBind(ClientContext &context, Tabl
 		// each one is a network round-trip. Early-exit once we know it is >1 table.
 		vector<reference<TableCatalogEntry>> matches;
 		catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
-			if (schema.internal || matches.size() >= 2) {
+			if (matches.size() >= 2 || IsSystemSchema(schema)) {
 				return;
 			}
 			schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
