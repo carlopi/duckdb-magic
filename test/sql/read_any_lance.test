@@ -1,22 +1,16 @@
 # name: test/sql/read_any_lance.test
-# description: test read_any with lance file format
+# description: read_any with Lance datasets (a directory, detected by .lance suffix)
 # group: [sql]
 
 require magic
 
-mode skip
+require lance
 
-statement ok
-INSTALL lance FROM community
-
-statement ok
-LOAD lance
-
-# create a local lance file
+# create a local Lance dataset (a directory)
 statement ok
 COPY (SELECT i, i*2 AS double_i FROM generate_series(1, 5) t(i)) TO '__TEST_DIR__/test.lance' (FORMAT LANCE)
 
-# .lance extension: auto-detected by file name pattern
+# .lance suffix: auto-detected (before any magic_* call, since it's a directory)
 query I
 SELECT COUNT(*) FROM read_any('__TEST_DIR__/test.lance');
 ----
@@ -37,3 +31,9 @@ query I
 SELECT COUNT(*) FROM read_any('__TEST_DIR__/test.lance', format:='lance');
 ----
 5
+
+# lance is a core extension -> reported without an @community tag
+query I
+SELECT magic_required_extensions('some/path/data.lance');
+----
+[lance]
