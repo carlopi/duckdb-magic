@@ -10,7 +10,10 @@
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/database.hpp"
 #include "duckdb/main/database_manager.hpp"
+#include "duckdb/main/extension_helper.hpp"
+#include "duckdb/main/settings.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/parser/qualified_name.hpp"
 
@@ -80,6 +83,29 @@ struct ReadAttacheableLocalState : public LocalTableFunctionState {
 //===--------------------------------------------------------------------===//
 // Helpers
 //===--------------------------------------------------------------------===//
+// Best-effort install+load of a community storage extension (e.g. mongo) before
+// attaching, since AttachDatabase's auto-load resolves against the core repo.
+// Mirrors the filesystem community-install path in magic_extension.cpp.
+static void EnsureCommunityExtension(ClientContext &context, const string &ext_name) {
+	if (context.db->ExtensionIsLoaded(ext_name)) {
+		return;
+	}
+	try {
+		if (Settings::Get<AutoinstallKnownExtensionsSetting>(context) &&
+		    Settings::Get<AllowCommunityExtensionsSetting>(context)) {
+			auto community_repo = ExtensionRepository::GetRepositoryByUrl("http://community-extensions.duckdb.org");
+			ExtensionInstallOptions options;
+			options.repository = community_repo;
+			ExtensionHelper::InstallExtension(context, ext_name, options);
+		}
+		if (Settings::Get<AutoloadKnownExtensionsSetting>(context)) {
+			ExtensionHelper::LoadExternalExtension(context, ext_name);
+		}
+	} catch (...) {
+		// best-effort — a real error surfaces from the attach below
+	}
+}
+
 static void ParseOptionsMap(const Value &map_value, unordered_map<string, Value> &out) {
 	if (map_value.IsNull()) {
 		return;
@@ -146,6 +172,14 @@ static unique_ptr<FunctionData> ReadAttacheableBind(ClientContext &context, Tabl
 		} else if (key == "options") {
 			ParseOptionsMap(param.second, attach_kv);
 		}
+	}
+
+	// A "name@community" type means the storage extension lives in the community
+	// repository: strip the tag and ensure it is installed from there before attaching.
+	auto community_pos = db_type.find("@community");
+	if (community_pos != string::npos) {
+		db_type = db_type.substr(0, community_pos);
+		EnsureCommunityExtension(context, db_type);
 	}
 
 	// relative_path like "schema.table" (or just "table") selects the table; it

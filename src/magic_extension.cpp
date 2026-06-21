@@ -35,6 +35,7 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            , "lance_case" as (FROM __lance_scan(file_name))
            , "ducklake_case" as (FROM read_attacheable_database(regexp_replace(file_name, '^ducklake:', ''), type:='ducklake', relative_path:=relative_path))
            , "motherduck_case" as (FROM read_attacheable_database(regexp_replace(file_name, '^md:', ''), type:='motherduck', relative_path:=relative_path))
+           , "mongo_case" as (FROM read_attacheable_database(file_name, type:='mongo@community', relative_path:=relative_path))
            , "sqlite_case" as (FROM read_attacheable_database(file_name, type:='sqlite', relative_path:=relative_path))
            , "blob_case" as (FROM read_blob(file_name))
            , "spatial_case" as (FROM st_read(file_name))
@@ -150,6 +151,8 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='ducklake' OR (format=='auto' AND file_name ILIKE 'ducklake:%') THEN 'ducklake_case'
                -- MotherDuck: md: prefix → strip + attach as motherduck
                WHEN format=='motherduck' OR format=='md' OR (format=='auto' AND file_name ILIKE 'md:%') THEN 'motherduck_case'
+               -- MongoDB: mongodb:// connection string → attach as mongo (community)
+               WHEN format=='mongo' OR (format=='auto' AND (file_name ILIKE 'mongodb://%' OR file_name ILIKE 'mongodb+srv://%')) THEN 'mongo_case'
                -- NOTE: .gml is excluded (GDAL fetches remote XSD schema, hangs without network)
                --       .osm is excluded (GDAL OSM driver requires a config file, crashes without it)
                --       .gpx is excluded (GDAL GPX driver crashes on read in current spatial version)
@@ -171,8 +174,8 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='excel' OR format=='xlsx' OR (format=='auto' AND magic_type(file_name) ILIKE 'Microsoft Excel%') THEN 'excel_case'
                WHEN format=='ods' OR (format=='auto' AND (magic_type(file_name) ILIKE 'OpenDocument Spreadsheet%' OR magic_mime(file_name) ILIKE '%opendocument.spreadsheet%' OR file_name ILIKE '%.ods')) THEN 'ods_case'
                WHEN format=='xml' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/xml' OR file_name ILIKE '%.xml')) THEN 'xml_case'
-               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, duckdb, sqlite, s3tables, postgres, mysql, ducklake, motherduck, lance, vortex, excel, ods, xml, yaml, spatial and blob')
-             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | duckdb | sqlite | s3tables | postgres | mysql | ducklake | motherduck (or md alias) | lance | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
+               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, duckdb, sqlite, s3tables, postgres, mysql, mongo, ducklake, motherduck, lance, vortex, excel, ods, xml, yaml, spatial and blob')
+             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | duckdb | sqlite | s3tables | postgres | mysql | mongo | ducklake | motherduck (or md alias) | lance | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
              END
        )
 ----   );
@@ -415,6 +418,12 @@ static vector<string> DetectFormatExtensions(const string &type_str,
   // MotherDuck (md: prefix)
   if (StringUtil::StartsWith(lower_path, "md:")) {
     return {"motherduck"};
+  }
+
+  // MongoDB (mongodb:// connection string) — community storage extension
+  if (StringUtil::StartsWith(lower_path, "mongodb://") ||
+      StringUtil::StartsWith(lower_path, "mongodb+srv://")) {
+    return {"mongo@community"};
   }
 
   // Spatial — GeoPackage uniquely detectable via mime
