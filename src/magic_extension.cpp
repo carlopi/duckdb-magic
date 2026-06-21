@@ -8,6 +8,7 @@
 #include "magic_mgc.hpp"
 #endif
 #include "magic_extension.hpp"
+#include "read_attacheable_database.hpp"
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -20,13 +21,16 @@ namespace duckdb {
 
 // clang-format off
 static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
-    {DEFAULT_SCHEMA, "read_any", {"file_name", nullptr}, {{"format", "'auto'"}, {nullptr, nullptr}}, R"(
-----CREATE OR REPLACE MACRO read_any(file_name, format:='auto') AS TABLE (
+    {DEFAULT_SCHEMA, "read_any_impl", {"file_name", "format", "relative_path", nullptr}, {{nullptr, nullptr}}, R"(
+----CREATE OR REPLACE MACRO read_any_impl(file_name, format, relative_path) AS TABLE (
        WITH "json_case" as (FROM read_json_auto(file_name))
            , "csv_case" as (FROM read_csv(file_name))
            , "parquet_case" as (FROM read_parquet(file_name))
            , "avro_case" as (FROM read_avro(file_name))
            , "arrow_case" as (FROM read_arrow(file_name))
+           , "duckdb_case" as (FROM read_attacheable_database(file_name, type:='duckdb', relative_path:=relative_path))
+           , "s3_tables_case" as (FROM read_attacheable_database(file_name, type:='iceberg', options:=MAP {'endpoint_type': 's3_tables'}, relative_path:=relative_path))
+           , "postgres_case" as (FROM read_attacheable_database(file_name, type:='postgres', relative_path:=relative_path))
            , "blob_case" as (FROM read_blob(file_name))
            , "spatial_case" as (FROM st_read(file_name))
            , "vortex_case" as (FROM read_vortex(file_name))
@@ -127,6 +131,11 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
        FROM query_table(
              CASE
                WHEN format=='blob' THEN 'blob_case'
+               -- S3 Tables (Iceberg): detect by ARN prefix; checked before any
+               -- magic_*() call since those would try to stat the non-file ARN.
+               WHEN format=='s3tables' OR format=='s3_tables' OR (format=='auto' AND file_name ILIKE 'arn:aws:s3tables:%') THEN 's3_tables_case'
+               -- Postgres connection string: detect by URI scheme (not a file)
+               WHEN format=='postgres' OR (format=='auto' AND (file_name ILIKE 'postgres://%' OR file_name ILIKE 'postgresql://%')) THEN 'postgres_case'
                -- NOTE: .gml is excluded (GDAL fetches remote XSD schema, hangs without network)
                --       .osm is excluded (GDAL OSM driver requires a config file, crashes without it)
                --       .gpx is excluded (GDAL GPX driver crashes on read in current spatial version)
@@ -142,12 +151,27 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='vortex' OR (format=='auto' AND file_name ILIKE '%.vortex') THEN 'vortex_case'
                -- Arrow IPC: magic returns generic 'data', detect by file extension
                WHEN format=='arrow' OR format=='ipc' OR (format=='auto' AND (file_name ILIKE '%.arrow' OR file_name ILIKE '%.arrows' OR file_name ILIKE '%.ipc')) THEN 'arrow_case'
+               -- DuckDB database file: read via read_attacheable_database (built-in, no extension)
+               WHEN format=='duckdb' OR (format=='auto' AND magic_type(file_name) ILIKE 'DuckDB database file%') THEN 'duckdb_case'
                WHEN format=='excel' OR format=='xlsx' OR (format=='auto' AND magic_type(file_name) ILIKE 'Microsoft Excel%') THEN 'excel_case'
                WHEN format=='ods' OR (format=='auto' AND (magic_type(file_name) ILIKE 'OpenDocument Spreadsheet%' OR magic_mime(file_name) ILIKE '%opendocument.spreadsheet%' OR file_name ILIKE '%.ods')) THEN 'ods_case'
                WHEN format=='xml' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/xml' OR file_name ILIKE '%.xml')) THEN 'xml_case'
-               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, vortex, excel, ods, xml, yaml, spatial and blob')
-             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
+               WHEN format=='auto' THEN error('read_any can not auto recognize a valid format, try explicitly: FROM read_any("' || file_name ||'", format:="csv"), explcitly supported formats are csv, json, har, ics, ipynb, parquet, avro, arrow, duckdb, s3tables, postgres, vortex, excel, ods, xml, yaml, spatial and blob')
+             ELSE error('read_any explicitly provided format is not one of: csv | json | har | ics (or ical/calendar alias) | ipynb (or notebook alias) | parquet | avro | arrow (or ipc alias) | duckdb | s3tables | postgres | vortex | excel | ods | xml | yaml | blob | spatial (or geo*/gpkg alias) | auto"')
              END
+       )
+----   );
+    )"},
+    {DEFAULT_SCHEMA, "read_any", {"file_name", nullptr}, {{"format", "'auto'"}, {nullptr, nullptr}}, R"(
+----CREATE OR REPLACE MACRO read_any(file_name, format:='auto') AS TABLE (
+       -- Split an optional `path@selector` suffix: detect/read on the clean
+       -- path, pass the (raw) selector through as relative_path. Plain S3 object
+       -- ARNs (arn:aws:s3:::bucket/key) are remapped to an s3:// URI so httpfs/aws
+       -- resolve region+credentials (distinct from arn:aws:s3tables: catalogs).
+       FROM read_any_impl(
+           regexp_replace(split_into_components(file_name).path, '^arn:aws:s3:::', 's3://'),
+           format,
+           split_into_components(file_name).selector
        )
 ----   );
     )"},
@@ -363,6 +387,11 @@ static vector<string> DetectFormatExtensions(const string &type_str,
   auto lower_mime = StringUtil::Lower(mime_str);
   auto lower_type = StringUtil::Lower(type_str);
 
+  // S3 Tables (Iceberg) — detected by ARN prefix (not a file; checked first)
+  if (StringUtil::StartsWith(lower_path, "arn:aws:s3tables:")) {
+    return {"iceberg"};
+  }
+
   // Spatial — GeoPackage uniquely detectable via mime
   if (StringUtil::Contains(lower_mime, "geopackage")) {
     return {"spatial"};
@@ -393,6 +422,13 @@ static vector<string> DetectFormatExtensions(const string &type_str,
       StringUtil::EndsWith(lower_path, ".arrows") ||
       StringUtil::EndsWith(lower_path, ".ipc")) {
     return {"nanoarrow"};
+  }
+
+  // DuckDB database file — read via built-in read_attacheable_database (no extension)
+  if (StringUtil::StartsWith(lower_type, "duckdb database file") ||
+      StringUtil::EndsWith(lower_path, ".duckdb") ||
+      StringUtil::EndsWith(lower_path, ".ddb")) {
+    return {};
   }
 
   // YAML (detected by extension — magic returns text/plain)
@@ -664,6 +700,12 @@ static void LoadInternal(ExtensionLoader &loader) {
     info.descriptions.push_back(std::move(desc));
     loader.RegisterFunction(std::move(info));
   }
+
+  // Register read_attacheable_database (generic hidden-attach + scan)
+  loader.RegisterFunction(ReadAttacheableDatabase::GetFunction());
+
+  // Register split_into_components (path@selector splitter)
+  loader.RegisterFunction(SplitIntoComponents::GetFunction());
 
   // Register read_any table macro
   for (idx_t index = 0;

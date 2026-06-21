@@ -1,0 +1,107 @@
+# name: test/sql/read_any_duckdb.test
+# description: read_any on DuckDB database files via read_attacheable_database + @ selector
+# group: [sql]
+
+require magic
+
+# --- split_into_components scalar ---
+query I
+SELECT split_into_components('a/b.db@s.t').path;
+----
+a/b.db
+
+query I
+SELECT split_into_components('a/b.db@s.t').selector;
+----
+s.t
+
+# no '@' -> whole input is the path, selector is empty (not null)
+query I
+SELECT split_into_components('a/b.db').selector;
+----
+(empty)
+
+# last '@' wins; a credentials '@' before the last '/' stays in the path
+query I
+SELECT split_into_components('postgres://u:p@host/db@public.orders').path;
+----
+postgres://u:p@host/db
+
+query I
+SELECT split_into_components('postgres://u:p@host/db@public.orders').selector;
+----
+public.orders
+
+# --- single-table DuckDB file: auto-detected, read directly ---
+statement ok
+ATTACH '__TEST_DIR__/single.duckdb' AS s;
+
+statement ok
+CREATE TABLE s.only_one(a INTEGER);
+
+statement ok
+INSERT INTO s.only_one VALUES (1), (2);
+
+statement ok
+DETACH s;
+
+query I
+SELECT count(*) FROM read_any('__TEST_DIR__/single.duckdb');
+----
+2
+
+# magic detects DuckDB database files; no extension required to read them
+query I
+SELECT magic_required_extensions('__TEST_DIR__/single.duckdb');
+----
+[]
+
+# --- multi-table DuckDB file: selection required ---
+statement ok
+ATTACH '__TEST_DIR__/multi.duckdb' AS m;
+
+statement ok
+CREATE TABLE m.t1(a INTEGER);
+
+statement ok
+CREATE TABLE m.t2(b INTEGER);
+
+statement ok
+INSERT INTO m.t1 VALUES (10);
+
+statement ok
+INSERT INTO m.t2 VALUES (20), (21);
+
+statement ok
+DETACH m;
+
+# @table selector
+query I
+SELECT b FROM read_any('__TEST_DIR__/multi.duckdb@t2') ORDER BY b;
+----
+20
+21
+
+# @schema.table selector
+query I
+SELECT a FROM read_any('__TEST_DIR__/multi.duckdb@main.t1');
+----
+10
+
+# no selector on a multi-table file -> error that lists candidates
+statement error
+SELECT * FROM read_any('__TEST_DIR__/multi.duckdb');
+----
+has multiple tables
+
+# explicit format override also works, with @ selector
+query I
+SELECT count(*) FROM read_any('__TEST_DIR__/multi.duckdb@t2', format:='duckdb');
+----
+2
+
+# --- engine function directly: read_attacheable_database ---
+query I
+SELECT count(*) FROM read_attacheable_database('__TEST_DIR__/multi.duckdb', type:='duckdb', relative_path:='t1');
+----
+1
