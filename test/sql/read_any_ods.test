@@ -32,4 +32,4 @@ SELECT COUNT(*) FROM read_any('${DATA_DIR}/test-files/test.ods', format:='ods');
 query I
 SELECT magic_required_extensions('${DATA_DIR}/test-files/test.ods');
 ----
-[rusty_sheet]
+[rusty_sheet@community]
