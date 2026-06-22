@@ -166,7 +166,7 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
                WHEN format=='json' OR (format=='auto' AND (magic_mime(file_name) ILIKE '%json' OR file_name ILIKE '%.json' OR file_name ILIKE '%.jsonl' OR file_name ILIKE '%.ndjson')) THEN 'json_case'
                WHEN format=='yaml' OR format=='yml' OR (format=='auto' AND (file_name ILIKE '%.yaml' OR file_name ILIKE '%.yml')) THEN 'yaml_case'
                WHEN format=='ics' OR format=='ical' OR format=='calendar' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/calendar' OR file_name ILIKE '%.ics' OR file_name ILIKE '%.ical')) THEN 'ics_case'
-               WHEN format=='csv' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/plain' OR magic_mime(file_name) ILIKE 'text/csv')) THEN 'csv_case'
+               WHEN format=='csv' OR format=='tsv' OR (format=='auto' AND (magic_mime(file_name) ILIKE 'text/plain' OR magic_mime(file_name) ILIKE 'text/csv' OR file_name ILIKE '%.csv' OR file_name ILIKE '%.tsv')) THEN 'csv_case'
                WHEN format=='parquet' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Parquet%') THEN 'parquet_case'
                WHEN format=='avro' OR (format=='auto' AND magic_type(file_name) ILIKE 'Apache Avro%') THEN 'avro_case'
                WHEN format=='vortex' OR (format=='auto' AND file_name ILIKE '%.vortex') THEN 'vortex_case'
@@ -235,6 +235,51 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
            SELECT UNNEST(log.entries) AS entry
            FROM read_json_auto(file_name, maximum_object_size=100000000)
        )
+----   );
+    )"},
+    {DEFAULT_SCHEMA, "magic_capabilities", {nullptr}, {{nullptr, nullptr}}, R"(
+----CREATE OR REPLACE MACRO magic_capabilities() AS TABLE (
+       -- magic:   libmagic type/mime substrings it is recognized by (NULL if not sniffable)
+       -- pattern: filename extensions and/or URI/ARN prefixes (NULL if none)
+       -- (both NULL => explicit format:= only)
+       FROM (VALUES
+           -- file formats
+           ('csv',        'file',       ['text/plain', 'text/csv'],   ['.csv', '.tsv'],                                     NULL),
+           ('json',       'file',       ['json'],                     ['.json', '.jsonl', '.ndjson'],                       'json'),
+           ('parquet',    'file',       ['Apache Parquet'],           ['.parquet'],                                         'parquet'),
+           ('avro',       'file',       ['Apache Avro'],              ['.avro'],                                            'avro'),
+           ('arrow',      'file',       NULL,                         ['.arrow', '.arrows', '.ipc'],                        'nanoarrow@community'),
+           ('excel',      'file',       ['Microsoft Excel'],          ['.xlsx', '.xls'],                                    'excel'),
+           ('ods',        'file',       ['OpenDocument Spreadsheet'], ['.ods'],                                             'rusty_sheet@community'),
+           ('xml',        'file',       ['text/xml'],                 ['.xml'],                                             'webbed@community'),
+           ('yaml',       'file',       NULL,                         ['.yaml', '.yml'],                                    'yaml@community'),
+           ('ics',        'file',       ['text/calendar'],            ['.ics', '.ical'],                                    NULL),
+           ('ipynb',      'file',       NULL,                         ['.ipynb'],                                           'json'),
+           ('har',        'file',       NULL,                         ['.har'],                                             'json'),
+           ('stat',       'file',       NULL,                         ['.dta', '.sav', '.zsav', '.por', '.sas7bdat', '.xpt'], 'read_stat@community'),
+           ('vortex',     'file',       NULL,                         ['.vortex'],                                          'vortex'),
+           ('lance',      'file',       NULL,                         ['.lance'],                                           'lance'),
+           ('spatial',    'file',       ['geopackage'],               ['.geojson', '.geojsonl', '.ndgeojson', '.topojson', '.fgb', '.prj', '.shp', '.kml'], 'spatial'),
+           ('blob',       'file',       NULL,                         NULL,                                                 NULL),
+           -- catalogs (str@schema.table)
+           ('duckdb',     'catalog',    ['DuckDB database file'],     NULL,                                                 NULL),
+           ('sqlite',     'catalog',    ['SQLite format 3'],          ['.sqlite', '.sqlite3'],                              'sqlite'),
+           ('s3tables',   'catalog',    NULL,                         ['arn:aws:s3tables:'],                                'iceberg'),
+           ('postgres',   'catalog',    NULL,                         ['postgres://', 'postgresql://'],                     'postgres'),
+           ('mysql',      'catalog',    NULL,                         ['mysql://'],                                         'mysql'),
+           ('mongo',      'catalog',    NULL,                         ['mongodb://', 'mongodb+srv://'],                     'mongo@community'),
+           ('ducklake',   'catalog',    NULL,                         ['ducklake:'],                                        'ducklake'),
+           ('motherduck', 'catalog',    NULL,                         ['md:'],                                              'motherduck'),
+           ('quack',      'catalog',    NULL,                         ['quack:'],                                           'quack'),
+           -- filesystems (scheme -> inner format auto-detected)
+           ('httpfs',     'filesystem', NULL,                         ['https://', 'http://', 's3://', 's3a://', 's3n://', 'gcs://', 'gs://', 'r2://'], 'httpfs'),
+           ('azure',      'filesystem', NULL,                         ['az://', 'abfss://', 'abfs://'],                     'azure'),
+           ('gh',         'filesystem', NULL,                         ['gh://'],                                            'gh@community'),
+           ('s3-arn',     'filesystem', NULL,                         ['arn:aws:s3:::'],                                    'httpfs'),
+           -- archives (str@member, or scheme)
+           ('zip',        'archive',    NULL,                         ['.zip@', 'zip://'],                                  'zipfs@community'),
+           ('tar',        'archive',    NULL,                         ['.tar@', 'tar://'],                                  'tarfs@community'),
+       ) _(format, kind, magic, pattern, extension)
 ----   );
     )"},
 	{nullptr, nullptr, {nullptr}, {{nullptr, nullptr}}, nullptr}
@@ -625,9 +670,11 @@ static vector<string> DetectFormatExtensions(const string &type_str,
     return {"json"};
   }
 
-  // CSV — built-in, no extension needed
+  // CSV/TSV — built-in, no extension needed (magic mime, extension fallback)
   if (StringUtil::Contains(lower_mime, "text/plain") ||
-      StringUtil::Contains(lower_mime, "text/csv")) {
+      StringUtil::Contains(lower_mime, "text/csv") ||
+      StringUtil::EndsWith(lower_path, ".csv") ||
+      StringUtil::EndsWith(lower_path, ".tsv")) {
     return {};
   }
 
