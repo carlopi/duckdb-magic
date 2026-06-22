@@ -199,8 +199,10 @@ static unique_ptr<FunctionData> ReadAttacheableBind(ClientContext &context, Tabl
 
 	AttachInfo info;
 	info.path = path;
-	// invalid UTF-8 prefix so a user cannot collide with this hidden name
-	info.name = "\x80__magic_attacheable_" + db_type + "_" + path;
+	// Hidden, uncollidable alias (embeds the type + full path). NOTE: kept valid
+	// UTF-8 on purpose — some catalogs (e.g. quack's client/server protocol) build
+	// a Value from the database name and reject the invalid-UTF-8 prefix trick.
+	info.name = "__magic_attacheable_" + db_type + "_" + path;
 	info.on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
 	// Storage extensions (e.g. iceberg) read their options from AttachInfo.options,
 	// NOT AttachOptions.options. Mirror what the `ATTACH ... (TYPE x, ...)` parser
