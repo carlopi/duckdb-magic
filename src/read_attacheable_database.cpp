@@ -331,9 +331,20 @@ static void SplitPathSelector(const string &input, string &path, string &selecto
 		selector = "";
 		return;
 	}
-	auto last_sep = input.find_last_of("/\\");
-	if (last_sep != string::npos && at < last_sep) {
-		// the '@' is part of the path (credentials / directory name), not a selector
+	// A credentials '@' lives in the URL *authority* — the part between '://' and
+	// the next '/' (e.g. scheme://user:pass@host/...). Only an '@' AFTER the
+	// authority is a selector. With no '://' there is no authority, so the last
+	// '@' is the selector. This protects credentials on any scheme (https, azure,
+	// postgres, …) while still allowing slash-containing selectors after the
+	// authority, e.g. https://host/file.zip@dir/x.csv or s3://b/scan.h5@/grp/ds.
+	idx_t authority_end = 0;
+	auto scheme = input.find("://");
+	if (scheme != string::npos) {
+		auto slash = input.find('/', scheme + 3);
+		authority_end = (slash == string::npos) ? input.size() : slash;
+	}
+	if (at < authority_end) {
+		// the only '@' is inside the authority (credentials) — no selector
 		path = input;
 		selector = "";
 		return;

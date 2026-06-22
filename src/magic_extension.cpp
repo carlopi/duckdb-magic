@@ -185,14 +185,31 @@ static const DefaultTableMacro dynamic_sql_examples_table_macros[] = {
     )"},
     {DEFAULT_SCHEMA, "read_any", {"file_name", nullptr}, {{"format", "'auto'"}, {nullptr, nullptr}}, R"(
 ----CREATE OR REPLACE MACRO read_any(file_name, format:='auto') AS TABLE (
-       -- Split an optional `path@selector` suffix: detect/read on the clean
-       -- path, pass the (raw) selector through as relative_path. Plain S3 object
-       -- ARNs (arn:aws:s3:::bucket/key) are remapped to an s3:// URI so httpfs/aws
-       -- resolve region+credentials (distinct from arn:aws:s3tables: catalogs).
+       -- Split an optional `path@selector` suffix, then normalize the path before
+       -- detection/read:
+       --   * archive member  file.zip@dir/x.parquet -> zip://file.zip/dir/x.parquet
+       --                     file.tar@dir/x.parquet -> tar://file.tar/dir/x.parquet
+       --     (selector may contain '/', so it is folded into the scheme URL and the
+       --      relative_path is cleared; the inner format is then auto-detected)
+       --   * plain S3 object ARN  arn:aws:s3:::bucket/key -> s3://bucket/key
        FROM read_any_impl(
-           regexp_replace(split_into_components(file_name).path, '^arn:aws:s3:::', 's3://'),
+           CASE
+             WHEN lower(split_into_components(file_name).path) LIKE '%.zip' AND split_into_components(file_name).selector != '' AND list_contains(magic_archive_members(split_into_components(file_name).path), split_into_components(file_name).selector)
+               THEN 'zip://' || split_into_components(file_name).path || '/' || split_into_components(file_name).selector
+             WHEN lower(split_into_components(file_name).path) LIKE '%.zip'
+               THEN error('read_any: archive "' || split_into_components(file_name).path || '" ' || CASE WHEN split_into_components(file_name).selector = '' THEN 'needs a member, e.g. read_any(''' || split_into_components(file_name).path || '@<member>'')' ELSE 'has no member "' || split_into_components(file_name).selector || '"' END || '. Available members: ' || array_to_string(magic_archive_members(split_into_components(file_name).path), ', '))
+             WHEN lower(split_into_components(file_name).path) LIKE '%.tar' AND split_into_components(file_name).selector != '' AND list_contains(magic_archive_members(split_into_components(file_name).path), split_into_components(file_name).selector)
+               THEN 'tar://' || split_into_components(file_name).path || '/' || split_into_components(file_name).selector
+             WHEN lower(split_into_components(file_name).path) LIKE '%.tar'
+               THEN error('read_any: archive "' || split_into_components(file_name).path || '" ' || CASE WHEN split_into_components(file_name).selector = '' THEN 'needs a member, e.g. read_any(''' || split_into_components(file_name).path || '@<member>'')' ELSE 'has no member "' || split_into_components(file_name).selector || '"' END || '. Available members: ' || array_to_string(magic_archive_members(split_into_components(file_name).path), ', '))
+             ELSE regexp_replace(split_into_components(file_name).path, '^arn:aws:s3:::', 's3://')
+           END,
            format,
-           split_into_components(file_name).selector
+           CASE
+             WHEN lower(split_into_components(file_name).path) LIKE '%.zip' OR lower(split_into_components(file_name).path) LIKE '%.tar'
+               THEN ''
+             ELSE split_into_components(file_name).selector
+           END
        )
 ----   );
     )"},
@@ -373,6 +390,11 @@ static const FilesystemScheme FILESYSTEM_SCHEMES[] = {
     {"az://",    "azure",  false},
     // GitHub (gh community ext)
     {"gh://",    "gh",     true},
+    // Archive filesystems (community): read a member by inner path, e.g.
+    // read_any('zip://archive.zip/dir/file.csv') — the inner format is then
+    // auto-detected. Inner paths contain '/', so this is the scheme route, not @.
+    {"zip://",   "zipfs",  true},
+    {"tar://",   "tarfs",  true},
     {nullptr,    nullptr,  false},
 };
 
@@ -396,6 +418,80 @@ static void TryEnsureFilesystem(ClientContext &context, const string &path) {
     TryEnsureCommunityFilesystem(context, scheme->extension);
   } else {
     ExtensionHelper::TryAutoLoadExtension(context, scheme->extension);
+  }
+}
+
+// magic_archive_members(path) -> VARCHAR[]
+// Lists the member file paths inside a .zip/.tar archive, ensuring the archive
+// filesystem (zipfs/tarfs, both community) is loaded first. Used by read_any to
+// produce a candidate list when an archive member is missing/unspecified.
+static void MagicArchiveMembersFun(DataChunk &args, ExpressionState &state,
+                                   Vector &result) {
+  auto &context = state.GetContext();
+  auto count = args.size();
+  auto &input = args.data[0];
+
+  UnifiedVectorFormat idata;
+  input.ToUnifiedFormat(count, idata);
+  auto in_strings = UnifiedVectorFormat::GetData<string_t>(idata);
+
+  for (idx_t i = 0; i < count; i++) {
+    auto idx = idata.sel->get_index(i);
+    if (!idata.validity.RowIsValid(idx)) {
+      FlatVector::SetNull(result, i, true);
+      continue;
+    }
+    auto path = in_strings[idx].GetString();
+    auto lower = StringUtil::Lower(path);
+    string scheme;
+    string ext;
+    if (StringUtil::EndsWith(lower, ".zip")) {
+      scheme = "zip";
+      ext = "zipfs";
+    } else if (StringUtil::EndsWith(lower, ".tar")) {
+      scheme = "tar";
+      ext = "tarfs";
+    }
+
+    vector<Value> members;
+    if (!scheme.empty()) {
+      // Ensure the archive filesystem. Install only if autoinstall+community are
+      // allowed, but LOAD unconditionally (loading an already-installed extension
+      // is harmless) so the membership check is reliable even with autoload off.
+      if (!context.db->ExtensionIsLoaded(ext)) {
+        try {
+          if (Settings::Get<AutoinstallKnownExtensionsSetting>(context) &&
+              Settings::Get<AllowCommunityExtensionsSetting>(context)) {
+            auto repo = ExtensionRepository::GetRepositoryByUrl(
+                "http://community-extensions.duckdb.org");
+            ExtensionInstallOptions options;
+            options.repository = repo;
+            ExtensionHelper::InstallExtension(context, ext, options);
+          }
+        } catch (...) {
+        }
+        try {
+          ExtensionHelper::LoadExternalExtension(context, ext);
+        } catch (...) {
+        }
+      }
+      auto &fs = FileSystem::GetFileSystem(context);
+      string prefix = scheme + "://" + path + "/";
+      try {
+        for (auto &entry : fs.Glob(prefix + "**")) {
+          auto &fp = entry.path;
+          members.push_back(Value(StringUtil::StartsWith(fp, prefix)
+                                      ? fp.substr(prefix.size())
+                                      : fp));
+        }
+      } catch (...) {
+        // archive filesystem unavailable / unreadable archive -> empty list
+      }
+    }
+    result.SetValue(i, Value::LIST(LogicalType::VARCHAR, std::move(members)));
+  }
+  if (count == 1) {
+    result.SetVectorType(VectorType::CONSTANT_VECTOR);
   }
 }
 
@@ -770,6 +866,12 @@ static void LoadInternal(ExtensionLoader &loader) {
 
   // Register split_into_components (path@selector splitter)
   loader.RegisterFunction(SplitIntoComponents::GetFunction());
+
+  // Register magic_archive_members (zip/tar member listing for candidate errors)
+  loader.RegisterFunction(ScalarFunction("magic_archive_members",
+                                         {LogicalType::VARCHAR},
+                                         LogicalType::LIST(LogicalType::VARCHAR),
+                                         MagicArchiveMembersFun));
 
   // Register read_any table macro
   for (idx_t index = 0;
